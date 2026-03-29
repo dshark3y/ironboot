@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-SCRIPT_VERSION="1.6.1"
+SCRIPT_VERSION="1.6.2"
 
 VERBOSE=0
 DRY_RUN=0
@@ -929,16 +929,15 @@ install_cron_jobs() {
 
   section "Scheduled maintenance" "Optionally schedule weekly jobs to keep the server automatically updated — full system upgrades, Docker image pulls, and disk cleanup."
 
-  local want_apt=0 want_docker=0 compose_dir=""
+  local want_apt=0 want_docker=0
 
   if ask_yes_no "Run a weekly full apt upgrade?" "Y" "Recommended — unattended-upgrades only applies security patches; this catches everything else and runs autoremove."; then
     want_apt=1
   fi
 
   if command_exists docker; then
-    if ask_yes_no "Run weekly Docker image updates and prune?" "Y" "Recommended — pulls latest images for all running containers, then removes dangling images and stopped containers."; then
+    if ask_yes_no "Run weekly Docker image updates and prune?" "Y" "Recommended — pulls latest images for all running containers and removes dangling images. Works automatically once containers are deployed."; then
       want_docker=1
-      compose_dir="$(ask_input "Docker Compose project directory to restart after image pull (blank to skip)" "")"
     fi
   else
     log "Docker not installed — skipping Docker maintenance options."
@@ -992,17 +991,16 @@ install_cron_jobs() {
       printf 'docker image prune -f\n'
       printf 'docker container prune -f\n'
       printf '\n'
-
-      if [[ -n "$compose_dir" ]]; then
-        printf '# ── Compose restart ──────────────────────────────────────────────────────────\n'
-        printf 'echo "--- docker compose up in %s ---"\n' "$compose_dir"
-        printf 'if [[ -d "%s" ]]; then\n' "$compose_dir"
-        printf '  (cd "%s" && docker compose pull && docker compose up -d)\n' "$compose_dir"
-        printf 'else\n'
-        printf '  echo "WARNING: compose directory not found: %s"\n' "$compose_dir"
-        printf 'fi\n'
-        printf '\n'
-      fi
+      printf '# ── Compose restart (optional) ───────────────────────────────────────────────\n'
+      printf '# Uncomment and set COMPOSE_DIR to auto-restart a stack after image pulls.\n'
+      printf '# Example: COMPOSE_DIR=/opt/myapp\n'
+      printf '#\n'
+      printf '# COMPOSE_DIR=\n'
+      printf '# if [[ -d "$COMPOSE_DIR" ]]; then\n'
+      printf '#   echo "--- docker compose up in $COMPOSE_DIR ---"\n'
+      printf '#   (cd "$COMPOSE_DIR" && docker compose pull && docker compose up -d)\n'
+      printf '# fi\n'
+      printf '\n'
     fi
 
     printf 'echo "=== vps-maintenance complete $(date) ==="\n'
@@ -1022,7 +1020,6 @@ CRONEOF
   local summary_str=""
   [[ "$want_apt"    -eq 1 ]] && summary_str+="${summary_str:+, }apt upgrade"
   [[ "$want_docker" -eq 1 ]] && summary_str+="${summary_str:+, }docker pull+prune"
-  [[ -n "$compose_dir"   ]] && summary_str+="${summary_str:+, }compose restart"
 
   CRON_RESULT="yes"
   ok "Maintenance cron scheduled (Sunday 03:00): ${summary_str}."
