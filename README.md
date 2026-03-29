@@ -6,10 +6,37 @@ Thankfully now I've fixed all your problems. I'm opening up my own quick script 
 
 No config files to write. No research rabbit holes. Just run it and answer the questions.
 
+This script is primarily built for my own use and infrastructure — I'm sharing it because it might save someone else the same hours I've spent doing this manually. Use it as a starting point, review the steps for your own setup, and adapt as needed.
+
+---
+
+## My recommended stack
+
+If you're starting from scratch, here's what I use and would point anyone towards:
+
+**Host — [Hetzner](https://hetzner.com)**
+Genuinely the best value in cloud hosting. A 2–4 core VPS handles OpenClaw, multiple web apps, or a handful of side projects without breaking a sweat. I run [sharkey.io](https://sharkey.io) and about a dozen other sites and projects on a single Hetzner box. The pricing is a fraction of AWS or DigitalOcean for equivalent specs.
+
+**Network access — [Tailscale](https://tailscale.com)**
+Set this up on every device you own and every server you run. Seriously. It creates a private encrypted network between all your machines — your laptop, your phone, your servers — and SSH becomes as simple as `tailscale ssh user@hostname` from anywhere. No exposed ports, no managing SSH keys across devices, no VPN config. I'd consider it non-negotiable at this point.
+
+---
+
+## Inspiration and prior work
+
+This script was built on top of ideas and patterns from two projects worth knowing about:
+
+- **[akcryptoguy/vps-harden](https://github.com/akcryptoguy/vps-harden)** — a solid, straightforward VPS hardening script that covers the core bases clearly
+- **[ranjith-src/vps-harden](https://github.com/ranjith-src/vps-harden)** — a very thorough hardening script with extensive module coverage including sysctl hardening, auditd, SOPS secret management, and more. Worth reading if you want to go deeper than ironboot does
+
+Both are good references. If your requirements are more complex than what ironboot covers, ranjith-src's version in particular goes significantly further.
+
 ---
 
 ## Contents
 
+- [My recommended stack](#my-recommended-stack)
+- [Inspiration and prior work](#inspiration-and-prior-work)
 - [Who this is for](#who-this-is-for)
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
