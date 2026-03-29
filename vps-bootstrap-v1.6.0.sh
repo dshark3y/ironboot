@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-SCRIPT_VERSION="1.5.0"
+SCRIPT_VERSION="1.6.0"
 
 VERBOSE=0
 DRY_RUN=0
@@ -331,7 +331,7 @@ Options:
   -h, --help         Show this help
 
 Step names:
-  user,ssh,sysctl,ufw,fail2ban,git,tailscale,close-ssh,docker,auto-updates,verify
+  user,ssh,sysctl,ufw,fail2ban,git,tailscale,close-ssh,docker,auto-updates,cron,verify
 USAGE
         exit 0
         ;;
@@ -379,6 +379,7 @@ print_summary() {
   _summary_row "Tailscale SSH"            "${TAILSCALE_SSH_RESULT:-no}"
   _summary_row "Docker"                   "${DOCKER_RESULT:-no}"
   _summary_row "Auto security updates"    "${AUTO_UPDATES_RESULT:-no}"
+  _summary_row "Scheduled maintenance"    "${CRON_RESULT:-no}"
   _summary_row "GitHub deploy key"        "${GITHUB_KEY_RESULT:-no}"
 
   printf "  ${DIM}──────────────────────────────────────────────${NC}\n"
@@ -919,6 +920,114 @@ EOF2
   ok "Unattended security upgrades configured."
 }
 
+install_cron_jobs() {
+  if ! should_run_step "cron"; then
+    log "Skipping step: cron"
+    return 0
+  fi
+
+  section "Scheduled maintenance" "Optionally schedule weekly jobs to keep the server automatically updated — full system upgrades, Docker image pulls, and disk cleanup."
+
+  local want_apt=0 want_docker=0 compose_dir=""
+
+  if ask_yes_no "Run a weekly full apt upgrade?" "Y" "Recommended — unattended-upgrades only applies security patches; this catches everything else and runs autoremove."; then
+    want_apt=1
+  fi
+
+  if command_exists docker; then
+    if ask_yes_no "Run weekly Docker image updates and prune?" "Y" "Recommended — pulls latest images for all running containers, then removes dangling images and stopped containers."; then
+      want_docker=1
+      compose_dir="$(ask_input "Docker Compose project directory to restart after image pull (blank to skip)" "")"
+    fi
+  else
+    log "Docker not installed — skipping Docker maintenance options."
+  fi
+
+  if [[ "$want_apt" -eq 0 && "$want_docker" -eq 0 ]]; then
+    CRON_RESULT="skipped"
+    return 0
+  fi
+
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    printf "  ${YELLOW}◦${NC}  write /usr/local/bin/vps-maintenance  ${DIM}(dry-run)${NC}\n"
+    printf "  ${YELLOW}◦${NC}  write /etc/cron.d/vps-maintenance  ${DIM}(dry-run)${NC}\n"
+    CRON_RESULT="dry-run"
+    return 0
+  fi
+
+  local maint_tmp
+  maint_tmp="$(mktemp)"
+
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf '# ironboot vps-maintenance — generated %s\n' "$(date)"
+    printf '# Edit this file to change what runs on the weekly maintenance schedule.\n'
+    printf 'set -euo pipefail\n'
+    printf '\n'
+    printf 'LOG=/var/log/vps-maintenance.log\n'
+    printf 'exec >> "$LOG" 2>&1\n'
+    printf 'echo ""\n'
+    printf 'echo "=== vps-maintenance started $(date) ==="\n'
+    printf '\n'
+
+    if [[ "$want_apt" -eq 1 ]]; then
+      printf '# ── Full system upgrade ──────────────────────────────────────────────────────\n'
+      printf 'echo "--- apt upgrade ---"\n'
+      printf 'apt-get update -y\n'
+      printf 'apt-get upgrade -y\n'
+      printf 'apt-get autoremove -y\n'
+      printf '\n'
+    fi
+
+    if [[ "$want_docker" -eq 1 ]]; then
+      printf '# ── Docker image updates ─────────────────────────────────────────────────────\n'
+      printf 'echo "--- docker image pull ---"\n'
+      printf 'docker ps --format "{{.Image}}" | sort -u | while read -r img; do\n'
+      printf '  docker pull "$img" || echo "pull failed: $img"\n'
+      printf 'done\n'
+      printf '\n'
+      printf '# ── Docker cleanup ───────────────────────────────────────────────────────────\n'
+      printf 'echo "--- docker prune ---"\n'
+      printf 'docker image prune -f\n'
+      printf 'docker container prune -f\n'
+      printf '\n'
+
+      if [[ -n "$compose_dir" ]]; then
+        printf '# ── Compose restart ──────────────────────────────────────────────────────────\n'
+        printf 'echo "--- docker compose up in %s ---"\n' "$compose_dir"
+        printf 'if [[ -d "%s" ]]; then\n' "$compose_dir"
+        printf '  (cd "%s" && docker compose pull && docker compose up -d)\n' "$compose_dir"
+        printf 'else\n'
+        printf '  echo "WARNING: compose directory not found: %s"\n' "$compose_dir"
+        printf 'fi\n'
+        printf '\n'
+      fi
+    fi
+
+    printf 'echo "=== vps-maintenance complete $(date) ==="\n'
+  } > "$maint_tmp"
+
+  install -o root -g root -m 755 "$maint_tmp" /usr/local/bin/vps-maintenance
+  rm -f "$maint_tmp"
+  safe_write_log INFO "WROTE FILE: /usr/local/bin/vps-maintenance"
+
+  write_file /etc/cron.d/vps-maintenance 644 root:root <<'CRONEOF'
+# ironboot vps-maintenance — weekly Sunday 03:00
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+0 3 * * 0   root   /usr/local/bin/vps-maintenance
+CRONEOF
+
+  local summary_str=""
+  [[ "$want_apt"    -eq 1 ]] && summary_str+="${summary_str:+, }apt upgrade"
+  [[ "$want_docker" -eq 1 ]] && summary_str+="${summary_str:+, }docker pull+prune"
+  [[ -n "$compose_dir"   ]] && summary_str+="${summary_str:+, }compose restart"
+
+  CRON_RESULT="yes"
+  ok "Maintenance cron scheduled (Sunday 03:00): ${summary_str}."
+  log "Script: /usr/local/bin/vps-maintenance  |  Cron: /etc/cron.d/vps-maintenance"
+}
+
 verify_setup() {
   if ! should_run_step "verify"; then
     log "Skipping step: verify"
@@ -994,7 +1103,14 @@ final_notes() {
   printf "       ${DIM}sudo fail2ban-client status${NC}\n"
   printf "  ${CYAN}5.${NC}  Check Docker:\n"
   printf "       ${DIM}docker --version && docker compose version${NC}\n"
-  printf "  ${CYAN}6.${NC}  Review the log if needed:\n"
+  if [[ "${CRON_RESULT:-no}" == "yes" ]]; then
+    printf "  ${CYAN}6.${NC}  Review or edit the maintenance script:\n"
+    printf "       ${DIM}sudo cat /usr/local/bin/vps-maintenance${NC}\n"
+    printf "       ${DIM}sudo cat /etc/cron.d/vps-maintenance${NC}\n"
+    printf "  ${CYAN}7.${NC}  Review the log if needed:\n"
+  else
+    printf "  ${CYAN}6.${NC}  Review the log if needed:\n"
+  fi
   printf "       ${DIM}sudo less %s${NC}\n" "$LOG_FILE"
   echo
 }
@@ -1037,6 +1153,7 @@ main() {
   offer_close_public_ssh
   install_docker
   install_auto_security_updates
+  install_cron_jobs
   verify_setup
 
   print_summary
