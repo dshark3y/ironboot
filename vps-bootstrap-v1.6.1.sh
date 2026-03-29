@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-SCRIPT_VERSION="1.6.0"
+SCRIPT_VERSION="1.6.1"
 
 VERBOSE=0
 DRY_RUN=0
@@ -406,7 +406,7 @@ create_sudo_user() {
 
   local username
   while true; do
-    username="$(ask_input "Enter username for the admin user" "david")"
+    username="$(ask_input "Enter username for the admin user" "your-name")"
     [[ -n "$username" ]] || { warn "Username cannot be empty."; continue; }
     [[ "$username" =~ ^[a-z_][a-z0-9_-]*$ ]] || { warn "Use a standard Linux username (lowercase, no spaces)."; continue; }
     break
@@ -737,7 +737,8 @@ install_git_and_github_key() {
     cat "${home_dir}/.ssh/id_ed25519.pub"
   fi
   echo
-  printf "  ${DIM}GitHub path: Settings → SSH and GPG keys${NC}\n"
+  printf "  ${DIM}Add it here: https://github.com/settings/ssh/new${NC}\n"
+  printf "  ${DIM}Or navigate: GitHub → Settings → SSH and GPG keys → New SSH key${NC}\n"
   printf "  ${DIM}Repo SSH clone: git@github.com:OWNER/REPO.git${NC}\n"
   GITHUB_KEY_RESULT="yes"
 }
