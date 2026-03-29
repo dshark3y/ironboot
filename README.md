@@ -1,10 +1,10 @@
 # ironboot
 
-Most people spin up a fresh VPS, log in as root, and start deploying things. Port 22 open to the world. Password authentication on. No firewall. Default kernel settings. The server does whatever it needs to do until something goes wrong — and then they spend a weekend figuring out why 1,200 login attempts per hour are showing up in their logs.
+I see many people setting up [OpenClaw](https://openclaw.ai), or hosting vibecoded projects and more. I've been working on servers for many years, hosting my own services, mainly on bare metal blank servers. I used to go through a process of step by step setup of these servers, meeting the bare minimum criteria for safe usage. Stuff like non-root user, closing ports, setting up Tailscale (highly recommend), installing fail2ban, turning off root. If you're not doing any of these things, it's an issue.
 
-This script fixes that. One run, 11 steps, guided prompts. Atomic output: a properly hardened Ubuntu or Debian server with auditable logs of every change made.
+Thankfully now I've fixed all your problems. I'm opening up my own quick script that walks you through hardening a fresh Ubuntu or Debian VPS — guided prompts, 11 steps, one run. It covers creating a non-root admin user, locking down SSH, hardening the kernel, setting up a firewall, installing fail2ban, optional Tailscale setup, Docker, and automatic security updates. It logs everything it does so you have a full audit trail of what changed and when.
 
-It is designed for developers setting up a fresh VPS who want a secure baseline without having to research every hardening decision from scratch. We built it because that research takes 4–6 hours the first time, and about 2 hours every subsequent time you forget what you did last time.
+No config files to write. No research rabbit holes. Just run it and answer the questions.
 
 ---
 
@@ -39,16 +39,16 @@ It is designed for developers setting up a fresh VPS who want a secure baseline 
 
 ## Who this is for
 
-Developers and small teams setting up a fresh VPS. The kind of setup where you want a repeatable, documented baseline — not a 300-line Ansible playbook or a managed security product.
+Anyone spinning up a fresh VPS who doesn't want to spend an afternoon researching what they should be doing — or worse, skipping it entirely because it's tedious.
 
 Good fit:
 - Fresh Hetzner, DigitalOcean, Vultr, or similar VPS
 - Personal production servers running apps, APIs, or Docker workloads
-- Team servers where you want everyone starting from the same baseline
-- Anyone who has been locked out of a server after a bad SSH config change (more common than anyone admits)
+- Team servers where you want everyone starting from the same hardened baseline
+- Anyone who has been locked out of a server after a bad SSH config change (it happens to everyone once)
 
 Not the right tool for:
-- Existing production servers with custom configurations — review each step carefully before running on anything non-fresh
+- Existing production servers with custom configurations — run `--dry-run` and review every step before applying anything
 - Non-systemd environments
 - Non-Debian distributions (Ubuntu and Debian only)
 
@@ -61,8 +61,8 @@ Not the right tool for:
 - systemd
 - Internet access for package installs
 
-Optional, depending on which steps you enable:
-- A [Tailscale](https://tailscale.com) account for private network access
+Optional depending on which steps you enable:
+- A [Tailscale](https://tailscale.com) account — I'd strongly recommend this
 - A GitHub account if you want deploy key access
 
 ---
@@ -89,15 +89,15 @@ sudo bash vps-bootstrap-v1.4.1.sh
 
 **3. Follow the prompts**
 
-Each step explains what it will do before asking. Skip anything that does not apply. Riskier steps — SSH changes, firewall changes, closing public SSH — have extra warnings and safer defaults.
+Each step tells you what it's going to do before it does it. You can skip anything that doesn't apply to your setup. The riskier steps — SSH changes, firewall changes, closing public SSH — have explicit warnings and conservative defaults. You won't be surprised.
 
-> **Before you run anything:** preview with `--dry-run` first, and keep your current SSH session open until you have confirmed the new access path works in a second terminal.
+> **Important:** always keep your current SSH session open while making SSH or firewall changes. Open a second terminal, confirm the new login works, then close the original. Don't skip this.
 
 ---
 
 ## What the script does
 
-11 steps in sequence. Every step is optional — skip any with `--skip`, or run a single one with `--only`. Saying no to a step leaves the server in a clean, unbroken state. Nothing is irreversible without a warning.
+11 steps in sequence. Every step is optional — skip any with `--skip`, or target a specific one with `--only`. Saying no to a step leaves the server clean. Nothing is done irreversibly without a warning first.
 
 ---
 
@@ -105,19 +105,19 @@ Each step explains what it will do before asking. Skip anything that does not ap
 
 **What it does**
 
-Creates a non-root user, adds them to the `sudo` group, creates their `~/.ssh` directory with correct permissions (`700`), and optionally copies root's `authorized_keys` so they can log in immediately with the same SSH key.
+Creates a non-root user, adds them to the `sudo` group, sets up their `~/.ssh` directory with correct permissions (`700`), and optionally copies root's `authorized_keys` across so they can log in straight away with the same SSH key you already have.
 
 **Why**
 
-Running day-to-day tasks as root means a single typo in the wrong place has no recovery path. A dedicated admin user with `sudo` forces you to consciously escalate privilege — smaller blast radius, cleaner audit trail. Most VPS providers give you root by default. The first thing to do is step off it.
+Logging in as root for everything is a bad habit. One wrong command with no recovery path. A non-root user with `sudo` means you have to consciously escalate privilege — much smaller blast radius if something goes wrong. Most VPS providers give you root access by default. First thing to do is get off it.
 
-**Why copying `authorized_keys` makes sense**
+**Why copying `authorized_keys` matters**
 
-If you already have SSH key access as root, copying those keys to the new user means you can log in as them immediately — without manually re-configuring SSH keys. That access is what lets you disable root SSH login in Step 2 without locking yourself out.
+If you already have SSH key access as root, copying those keys to the new user means you can log in as them immediately without any additional SSH key setup. That working login is what lets you safely disable root SSH access in the next step without locking yourself out.
 
 **What to watch for**
 
-When prompted for a password, Linux will not echo characters as you type. This is expected. Type the password, press Enter, type it again.
+When prompted to set a password, Linux won't show anything as you type — this is normal. Type the password, hit Enter, type it again to confirm.
 
 ---
 
@@ -125,21 +125,21 @@ When prompted for a password, Linux will not echo characters as you type. This i
 
 **What it does**
 
-Adjusts `/etc/ssh/sshd_config` to harden SSH access. Before restarting SSH, the script runs `sshd -t` to validate the config — a syntax error will not cut off your session.
+Tightens up `/etc/ssh/sshd_config`. Before restarting SSH, the script validates the config with `sshd -t` — a syntax error will not cut off your session.
 
-You are asked about three things:
+You're asked about three things:
 - **Changing the SSH port** — moves SSH off port 22
 - **Disabling direct root login** — prevents SSH login as root
 - **Disabling password authentication** — requires SSH keys
 
-These are applied silently regardless of what you answer above (they are unambiguous hardening defaults):
+These are applied silently regardless of what you answer above — they're unambiguous hardening defaults with no real downside:
 
 | Setting | Value | Why |
 |---|---|---|
 | `MaxAuthTries` | `3` | Limits brute-force attempts per connection |
 | `LoginGraceTime` | `30` | Disconnects unauthenticated connections after 30 seconds |
 | `MaxSessions` | `3` | Caps concurrent sessions per connection |
-| `X11Forwarding` | `no` | Disables X11 forwarding — a common attack surface on servers |
+| `X11Forwarding` | `no` | Disables X11 forwarding — nobody needs this on a server |
 | `PermitEmptyPasswords` | `no` | Prevents login with blank passwords |
 | `ClientAliveInterval` | `300` | Sends a keepalive every 5 minutes |
 | `ClientAliveCountMax` | `3` | Disconnects after 3 missed keepalives (~15 minutes idle) |
@@ -147,21 +147,21 @@ These are applied silently regardless of what you answer above (they are unambig
 
 **Why change the SSH port**
 
-Port 22 is scanned by automated bots constantly. Moving SSH to a non-standard port does not make it more secure against a targeted attack. It eliminates the background noise — thousands of connection attempts per day that clutter logs and keep fail2ban busy. Port `2293` is the suggested default. Any port above `1024` that is not otherwise in use works.
+Port 22 gets scanned constantly by automated bots. Moving SSH somewhere else doesn't make it more secure against anyone actually targeting you, but it kills the background noise — thousands of connection attempts a day that clog your logs and keep fail2ban busy for no reason. Port `2293` is suggested as a default. Anything above `1024` that's not already in use works.
 
 **Why disable root login**
 
-Root is the highest-value target on any Linux server. Disabling SSH login for root means a compromised key cannot hand over the entire machine immediately. Everything goes through a named user, which is auditable and revocable.
+Root is the most valuable account on any Linux server. Disabling SSH login for root means a compromised key can't immediately hand over the entire machine. All access goes through a named user, which is auditable and easier to revoke.
 
 **Why disable password authentication**
 
-SSH passwords can be brute-forced. SSH keys cannot — they use asymmetric cryptography. Once key-based login is confirmed and working, keeping password auth enabled is unnecessary risk.
+SSH passwords can be brute-forced. SSH keys can't — they use asymmetric cryptography. Once you've confirmed key-based login works, keeping password auth enabled is unnecessary risk with no benefit.
 
-> **Safety check built in:** before offering to disable password auth, the script checks whether the target user has an `authorized_keys` file. If there are no SSH keys present, it blocks the option and explains why. This prevents the most common lockout scenario.
+> **Safety check:** before offering to disable password auth, the script checks whether the target user actually has an `authorized_keys` file. If there are no SSH keys present, it refuses to disable password auth and tells you to add a key first. This prevents the most common lockout scenario.
 
 **What to watch for**
 
-Never close your current session after making SSH changes. Open a second terminal, confirm the new login works, then close the original.
+Open a second terminal and confirm the new login works before closing your current session. Every time.
 
 ---
 
@@ -169,22 +169,22 @@ Never close your current session after making SSH changes. Open a second termina
 
 **What it does**
 
-Writes `/etc/sysctl.d/99-vps-bootstrap.conf` and applies it with `sysctl --system`. Configures kernel-level network security parameters that most cloud images ship with at their defaults — which are not sensible for a public-facing server.
+Writes `/etc/sysctl.d/99-vps-bootstrap.conf` and applies it with `sysctl --system`. These are kernel-level network security settings that most cloud images ship with at defaults that aren't appropriate for a public-facing server.
 
 | Parameter | What it does |
 |---|---|
-| `net.ipv4.tcp_syncookies = 1` | SYN cookies — protects against SYN flood attacks |
+| `net.ipv4.tcp_syncookies = 1` | SYN flood protection |
 | `accept_redirects = 0` | Blocks ICMP redirect acceptance — prevents routing table manipulation |
 | `send_redirects = 0` | Stops the server from sending ICMP redirects |
 | `accept_source_route = 0` | Rejects source-routed packets — a known attack vector |
 | `log_martians = 1` | Logs packets with impossible source addresses |
 | `icmp_echo_ignore_broadcasts = 1` | Prevents use in ICMP broadcast amplification attacks |
-| `icmp_ignore_bogus_error_responses = 1` | Silences responses to malformed ICMP error packets |
+| `icmp_ignore_bogus_error_responses = 1` | Ignores responses to malformed ICMP error packets |
 | `rp_filter = 1` | Reverse path filtering — drops packets arriving on unexpected interfaces |
 
 **Why**
 
-Application-layer defences mean nothing if the kernel is behaving unsafely at the network level. A server can be perfectly configured at every other layer and still be vulnerable to IP spoofing, routing attacks, or used as a DDoS amplification node if these parameters are left at defaults. None of these settings break normal operation — they only restrict abnormal traffic patterns.
+You can do everything right at the application layer and still be vulnerable at the network layer if these are left at defaults. None of these break normal server operation — they only affect abnormal traffic patterns. There's no reason not to apply them.
 
 ---
 
@@ -192,25 +192,21 @@ Application-layer defences mean nothing if the kernel is behaving unsafely at th
 
 **What it does**
 
-Installs and enables UFW (Uncomplicated Firewall) with a default-deny incoming policy. SSH is allowed on the active port before UFW is enabled — the ordering is intentional and not something you need to manage manually.
+Installs and enables UFW (Uncomplicated Firewall) with a default-deny incoming policy. SSH gets allowed on the active port before UFW is enabled — this ordering is handled automatically so you can't accidentally lock yourself out by enabling the firewall before your own connection is whitelisted.
 
-You are asked about:
-- Temporarily allowing port 22 alongside a custom SSH port (useful during testing)
+You're asked about:
+- Temporarily allowing port 22 alongside a custom SSH port (useful while you're testing)
 - Allowing HTTP (port 80)
 - Allowing HTTPS (port 443)
 - Rate limiting on the SSH port
 
 **Why default-deny**
 
-Without a firewall, every port your server is listening on is reachable from the public internet. Applications bind to ports — not all of them are intended to be public. Databases, internal APIs, and debug interfaces frequently listen on ports that should never be externally accessible. Default-deny means only ports you explicitly open are reachable, regardless of what runs on the server later.
+Without a firewall, every port your server is listening on is reachable from the internet. Applications bind to ports they need — not all of them are meant to be public. Databases, internal APIs, and debug interfaces frequently end up listening on ports that should never be externally accessible. Default-deny means only ports you explicitly open are reachable, regardless of what runs on the server later.
 
 **Why rate limit SSH**
 
-`ufw limit` blocks a source IP after 6 or more connection attempts within 30 seconds. It is a lightweight first line of defence before fail2ban's threshold is reached. The two work together — rate limiting catches the burst; fail2ban catches the sustained attempt.
-
-**Why SSH is allowed before UFW enables**
-
-If you enable UFW with a default-deny policy before allowing your SSH port, you are locked out immediately. The script handles this ordering automatically.
+`ufw limit` blocks a source IP after 6 or more connection attempts within 30 seconds. It's a lightweight first line of defence that works alongside fail2ban — rate limiting catches the burst, fail2ban handles the sustained attempt.
 
 ---
 
@@ -218,22 +214,22 @@ If you enable UFW with a default-deny policy before allowing your SSH port, you 
 
 **What it does**
 
-Installs fail2ban and writes a jail for SSH to `/etc/fail2ban/jail.d/sshd-local.conf`. When a source IP fails authentication 3 times within 10 minutes, it is banned for 3 hours via UFW rules.
+Installs fail2ban and writes an SSH jail to `/etc/fail2ban/jail.d/sshd-local.conf`. After 3 failed authentication attempts within 10 minutes, the source IP is banned for 3 hours. Bans are enforced through UFW rules.
 
 | Setting | Value | Why |
 |---|---|---|
 | `maxretry` | `3` | Bans after 3 failures — tighter than the default 5 |
-| `bantime` | `3h` | Long enough to deter automated tools without being permanent |
+| `bantime` | `3h` | Long enough to deter automated tools |
 | `findtime` | `10m` | Counts failures within a 10-minute window |
-| `banaction` | `ufw` | UFW enforces bans — consistent with your firewall rules, visible in `ufw status` |
+| `banaction` | `ufw` | UFW enforces bans — consistent with your firewall, visible in `ufw status` |
 
-**Why fail2ban matters even with SSH keys**
+**Why fail2ban even with SSH keys**
 
-Fail2ban is not only for password brute-force protection. It also blocks bots probing for valid usernames, testing for known vulnerabilities, and generating auth log noise. Even with password auth disabled, it keeps scan traffic down and logs readable.
+It's not just for brute-forcing passwords. It also blocks bots probing for valid usernames, testing for known vulnerabilities, and generating log noise. Even with password auth disabled, it keeps scans down and logs readable. I've been running it on every server I manage for years.
 
 **Why 3 retries**
 
-A legitimate user failing SSH key auth more than 3 times has a configuration problem that more attempts will not fix. Three retries is enough for human error. Anything beyond that is a probe.
+A legitimate user failing SSH key auth more than 3 times has a config problem that extra attempts won't fix. Three is enough for genuine mistakes and strict enough to stop automated tools fast.
 
 ---
 
@@ -241,19 +237,19 @@ A legitimate user failing SSH key auth more than 3 times has a configuration pro
 
 **What it does**
 
-Installs `git` and `openssh-client`. Optionally generates an ed25519 SSH keypair for the admin user, adds GitHub to `known_hosts`, and prints the public key so you can add it to GitHub immediately.
+Installs `git` and `openssh-client`. Optionally generates an ed25519 SSH keypair for the admin user, adds GitHub to `known_hosts`, and prints the public key so you can add it to GitHub straight away.
 
 **Why ed25519**
 
-Ed25519 keys are shorter, faster, and considered more secure than RSA-2048 or RSA-4096 for modern use. They are supported by all current versions of GitHub, GitLab, and Bitbucket.
+Shorter, faster, and more secure than RSA-2048 or RSA-4096 for modern use. Supported everywhere — GitHub, GitLab, Bitbucket.
 
 **Why a dedicated deploy key**
 
-A server with its own SSH key for GitHub means you can revoke server access independently, see exactly which server is making GitHub requests in your audit log, and avoid exposing a personal key if the server is compromised.
+A server with its own GitHub key means you can revoke server access independently, see exactly which server is making GitHub requests, and avoid exposing your personal key if the server is ever compromised.
 
 **Why `ssh-keyscan` for `known_hosts`**
 
-First-time SSH connections to GitHub prompt for host key confirmation — which blocks automated clones and deploys. `ssh-keyscan` pre-populates `known_hosts` so the connection works without manual intervention. This is a convenience trade-off; pinned keys are stricter for high-security environments.
+First-time SSH connections to GitHub prompt for host key confirmation — which blocks automated clones and deploys. `ssh-keyscan` pre-populates `known_hosts` so connections work without manual intervention. Pinned keys are stricter for high-security environments, but this is fine for the vast majority of setups.
 
 ---
 
@@ -261,19 +257,19 @@ First-time SSH connections to GitHub prompt for host key confirmation — which 
 
 **What it does**
 
-Installs Tailscale, enables and starts `tailscaled`, and optionally brings up the connection with SSH enabled. An auth key can be provided to authenticate non-interactively, or the script will print a login URL.
+Installs Tailscale, enables and starts `tailscaled`, and optionally brings up the connection with SSH enabled. Provide an auth key to authenticate non-interactively, or the script will give you a login URL to finish in a browser.
 
 **What Tailscale is**
 
-A zero-config VPN that creates a private network between your devices. Each machine on your Tailnet has a stable private IP and hostname regardless of its public IP. Traffic is encrypted end-to-end using WireGuard.
+A zero-config VPN that creates a private network between your devices. Every machine on your Tailnet gets a stable private IP and hostname. Traffic is encrypted end-to-end over WireGuard. Once it's set up, accessing your server privately is as easy as `tailscale ssh user@hostname` from any device on your Tailnet.
 
-**Why Tailscale SSH**
+**Why I strongly recommend Tailscale SSH**
 
-Tailscale SSH routes SSH connections through your Tailnet instead of the public internet. The server's SSH port does not need to be open in UFW at all. Access is controlled by your identity provider, visible in the Tailscale admin panel, and revocable instantly. SSH keys are not required — Tailscale handles authentication.
+With Tailscale SSH, your server's SSH port doesn't need to be open to the internet at all. SSH is only reachable from your own devices. Authentication is handled by your identity provider. Access is visible and revocable from the Tailscale admin panel instantly. I run this on everything I manage personally — it removes an entire attack surface.
 
 **Why it defaults to no**
 
-Tailscale requires an account and runs a persistent background service. It is the right call for personal infrastructure. It is not appropriate for every setup, and enabling it without understanding the implications can leave a server in an unexpected state.
+Tailscale requires an account and runs a persistent background service. It's not appropriate for every setup, and enabling it without understanding what it does can leave a server in a confusing state if you're not expecting it.
 
 ---
 
@@ -281,18 +277,18 @@ Tailscale requires an account and runs a persistent background service. It is th
 
 **What it does**
 
-If Tailscale SSH was enabled in Step 7, this step offers to remove the UFW rules that allow public SSH access — leaving SSH reachable only through your Tailnet.
+If Tailscale SSH was enabled in Step 7, this step offers to remove the UFW rules that allow public SSH access — leaving SSH only reachable through your Tailnet.
 
-**Why this is ordered last**
+**Why this is last and defaults to no**
 
-The step only appears when Tailscale SSH is enabled in the same run. It defaults to no. The warnings are explicit: test Tailscale SSH from a separate terminal before answering yes. This ordering exists because removing public SSH access before confirming an alternative works is one of the most reliable ways to permanently lock yourself out of a server.
+Removing public SSH access before confirming that Tailscale SSH actually works is one of the most reliable ways to permanently lock yourself out of a server. The step only appears when Tailscale SSH was enabled in the same run. The warnings are explicit. Test first, then answer yes.
 
 **When to say yes**
 
 Only after:
-1. Tailscale is connected and the server appears in your Tailscale dashboard
-2. You have opened a second terminal and confirmed `tailscale ssh user@hostname` works
-3. You are comfortable that Tailscale is the only access path going forward
+1. The server appears in your Tailscale dashboard as connected
+2. You've opened a second terminal and confirmed `tailscale ssh user@hostname` works
+3. You're happy that Tailscale is the only access path going forward
 
 ---
 
@@ -300,17 +296,17 @@ Only after:
 
 **What it does**
 
-Installs Docker Engine and the Docker Compose plugin from Docker's official apt repository — not the version in Ubuntu or Debian's default repositories, which is typically several major versions behind. Enables the Docker service, and adds the admin user to the `docker` group.
+Installs Docker Engine and the Docker Compose plugin from Docker's official apt repository — not the version in Ubuntu or Debian's default repositories, which is typically multiple major versions behind. Enables the Docker service and adds the admin user to the `docker` group.
 
 Packages installed: `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, `docker-compose-plugin`.
 
 **Why Docker's own repository**
 
-The Ubuntu and Debian package repositories ship a version of Docker that lags behind by months to years. Using Docker's own repository means current releases with up-to-date security patches. The script adds Docker's GPG key and signs the repository source before installing anything.
+The Docker version in Ubuntu's default apt sources can be years out of date. Docker's own repository gives you the current release with up-to-date security patches. The script adds Docker's GPG key and signs the repository source before installing anything.
 
 **Why add the user to the `docker` group**
 
-Docker requires root by default. Adding the admin user to the `docker` group lets them run `docker` commands without `sudo`. This is effectively equivalent to root access — containers can mount the host filesystem. On a personal or small-team server where the admin is trusted, this is the standard trade-off.
+Without this, running Docker requires `sudo` every time. Adding the admin user to the `docker` group lets them run Docker commands directly. Worth knowing: `docker` group membership is effectively equivalent to root access since containers can mount the host filesystem. On a personal or small-team server where the admin is trusted, this is the standard setup.
 
 ---
 
@@ -318,7 +314,7 @@ Docker requires root by default. Adding the admin user to the `docker` group let
 
 **What it does**
 
-Installs `unattended-upgrades` and configures it to apply security updates daily. Auto-reboot is explicitly disabled.
+Installs `unattended-upgrades` and configures it to apply security updates daily. Auto-reboot is explicitly disabled so the server doesn't restart on you unexpectedly.
 
 | Setting | Value |
 |---|---|
@@ -328,13 +324,11 @@ Installs `unattended-upgrades` and configures it to apply security updates daily
 | Auto-clean interval | Every 7 days |
 | Auto-reboot | **Disabled** |
 
-**Why automatic security updates**
+**Why**
 
-The most common path to a compromised server is a known vulnerability in installed software that was never patched. Security updates for Ubuntu and Debian are released quickly when vulnerabilities are disclosed. Manually tracking and applying updates on a personal server is discipline that degrades over time. Unattended upgrades keeps the security baseline maintained without requiring it.
+The most common way servers get compromised is through unpatched known vulnerabilities. Security updates for Ubuntu and Debian come out quickly when something is disclosed. Manually tracking and applying them on a personal server is discipline that degrades over time. Unattended upgrades keeps the baseline maintained without requiring it.
 
-**Why auto-reboot is off**
-
-Kernel updates that require a reboot are infrequent. Unexpected reboots disrupt running services. You want to control when the server restarts. Check whether a reboot is pending at any time:
+Auto-reboot is off because unexpected reboots disrupt running services. Kernel updates that need a reboot are infrequent. You want to choose when the server restarts. Check whether one is pending:
 
 ```bash
 cat /run/reboot-required 2>/dev/null && echo "reboot needed" || echo "no reboot needed"
@@ -346,7 +340,7 @@ cat /run/reboot-required 2>/dev/null && echo "reboot needed" || echo "no reboot 
 
 **What it does**
 
-Runs a set of checks after the bootstrap to confirm the key services are in a working state:
+Runs a set of checks after the bootstrap to confirm everything is in a working state:
 
 - `sshd -t` — validates SSH config syntax
 - `ufw status` — shows active firewall rules
@@ -356,9 +350,9 @@ Runs a set of checks after the bootstrap to confirm the key services are in a wo
 
 **Why**
 
-A change in one step can have unintended effects that only surface when you try to use the server. Running automated checks immediately after setup catches the most common issues before you close the terminal. The results appear in the log file for future reference.
+A change in one step can have side effects that only show up when you try to use the server. Running automated checks immediately after setup catches the most common issues before you close the terminal. Results go into the log file for future reference.
 
-This step does not replace manual testing. Open a new terminal and verify your own access path before closing the original session.
+This doesn't replace testing manually. Open a new terminal and verify your own access path before closing the original session.
 
 ---
 
@@ -377,7 +371,7 @@ Options:
 
 ### `--dry-run`
 
-Preview every action without changing anything on the server. Prompts still appear; all writes, installs, and service restarts are shown as `(dry-run)`. Run this first on any server that is not a clean install.
+Preview every action without changing anything. Prompts still appear; all writes, installs, and service restarts show as `(dry-run)`. Run this first on any server that's not a clean install.
 
 ```bash
 sudo bash vps-bootstrap-v1.4.1.sh --dry-run
@@ -385,7 +379,7 @@ sudo bash vps-bootstrap-v1.4.1.sh --dry-run
 
 ### `--verbose`
 
-Stream command output live to the terminal instead of writing only to the log file. Useful for watching a failing step in real time.
+Stream command output live to the terminal instead of writing only to the log. Useful when a step is failing and you want to see what's happening.
 
 ```bash
 sudo bash vps-bootstrap-v1.4.1.sh --verbose
@@ -393,7 +387,7 @@ sudo bash vps-bootstrap-v1.4.1.sh --verbose
 
 ### `--only`
 
-Run specific steps and skip everything else. Useful for re-running a single step on an already-configured server.
+Run specific steps, skip everything else. Useful for re-running a single step on an already-configured server.
 
 ```bash
 sudo bash vps-bootstrap-v1.4.1.sh --only=docker,verify
@@ -401,7 +395,7 @@ sudo bash vps-bootstrap-v1.4.1.sh --only=docker,verify
 
 ### `--skip`
 
-Run everything except the steps you name. Useful when most of the script applies but one or two steps do not.
+Run everything except the steps you name.
 
 ```bash
 sudo bash vps-bootstrap-v1.4.1.sh --skip=git,tailscale,close-ssh
@@ -431,7 +425,7 @@ sudo bash vps-bootstrap-v1.4.1.sh --skip=git,tailscale,close-ssh
 
 ### Fresh VPS — public SSH retained
 
-Admin user, hardened SSH, firewall, fail2ban, Docker, auto-updates. SSH stays reachable from the public internet on a custom port.
+Admin user, hardened SSH, firewall, fail2ban, Docker, auto-updates. SSH stays on the internet on a custom port.
 
 ```bash
 sudo bash vps-bootstrap-v1.4.1.sh
@@ -440,20 +434,20 @@ sudo bash vps-bootstrap-v1.4.1.sh
 Suggested answers:
 - Create admin user: **yes**
 - Copy root SSH keys to new user: **yes**
-- Change SSH port: **yes** — pick a port above 1024
+- Change SSH port: **yes** — pick any port above 1024
 - Disable root login: **yes** — after confirming the new user has SSH key access
 - Disable password auth: **yes** — if key-based login is confirmed working
 - Enable UFW: **yes** — allow 80/443 if running a web server
 - Install fail2ban: **yes**
-- Install Tailscale: **no**
-- Install Docker: **yes**
+- Install Tailscale: **up to you** — I'd say yes
+- Install Docker: **yes** if you need it
 - Auto security updates: **yes**
 
 ---
 
 ### Tailscale-first VPS — no public SSH
 
-For a setup where SSH is never exposed to the public internet. After this, the server is only reachable through your Tailnet.
+SSH never exposed to the internet. The server is only reachable through your Tailnet. This is how I run most of my own servers.
 
 ```bash
 sudo bash vps-bootstrap-v1.4.1.sh
@@ -467,7 +461,7 @@ Suggested answers:
 - Install fail2ban: **yes**
 - Install Tailscale: **yes**
 - Enable Tailscale SSH: **yes**
-- **Open a second terminal. Run `tailscale ssh user@hostname`. Confirm it works.**
+- **Open a second terminal. Run `tailscale ssh user@hostname`. Confirm it works before continuing.**
 - Remove public SSH access: **yes** — only after the test above passes
 
 ---
@@ -542,23 +536,19 @@ Every run writes a timestamped log to `/var/log/`:
 /var/log/vps-bootstrap-20240315-143022.log
 ```
 
-The path is printed at startup and in the final summary. The log records every command run with its full arguments, every file written with path/mode/owner, every service restart, and every timestamped action taken by the script.
-
-Created with `chmod 600` — only root can read it.
+The path is printed at startup and in the final summary. The log records every command run with its full arguments, every file written with path, mode and owner, every service restart, and every timestamped action. Created with `chmod 600` — only root can read it.
 
 ---
 
 ## Security notes
 
-**Never close your current session until the new one is tested.** This applies to every SSH change, every firewall change, and every decision to close public access. Keep the original session open, open a second terminal, confirm everything works, then close the original. There is no other safe order.
+**Never close your current session until the new one is tested.** Every SSH change, every firewall change, every decision to close public access — open a second terminal, confirm it works, then close the original. There is no other safe order.
 
-**The script validates SSH config before restarting.** `sshd -t` runs before any SSH service restart. If the config has a syntax error, the script stops and points you to the backup. Backups are written as `filename.bak.TIMESTAMP` before any changes are made.
+**The script validates SSH config before restarting.** `sshd -t` runs before any SSH service restart. If there's a syntax error, the script stops and points you to the backup. Backups are written as `filename.bak.TIMESTAMP` before any changes are made.
 
-**Password auth is blocked from being disabled if no SSH keys exist.** If the target user has no `authorized_keys` file, the option is not offered. The script tells you to add a key first, then re-run with `--only=ssh`.
+**Password auth is blocked from being disabled if no SSH keys exist.** If the target user has no `authorized_keys` file, the option is not presented. The script tells you to add a key first, then re-run with `--only=ssh`.
 
-**Run `--dry-run` on any non-fresh server.** The script is designed for clean installs. On an existing server, some steps may conflict with your current configuration. Preview before applying.
-
-This script establishes a solid baseline. It does not replace monitoring, regular access reviews, or application-level security for what you deploy on top.
+**Run `--dry-run` on any non-fresh server.** The script is designed for clean installs. On an existing server, some steps may conflict with your current configuration.
 
 ---
 
