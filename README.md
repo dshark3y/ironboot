@@ -2,7 +2,7 @@
 
 I see many people setting up [OpenClaw](https://openclaw.ai), or hosting vibecoded projects and more. I've been working on servers for many years, hosting my own services, mainly on bare metal blank servers. I used to go through a process of step by step setup of these servers, meeting the bare minimum criteria for safe usage. Stuff like non-root user, closing ports, setting up Tailscale (highly recommend), installing fail2ban, turning off root. If you're not doing any of these things, it's an issue.
 
-Thankfully now I've fixed all your problems. I'm opening up my own quick script that walks you through hardening a fresh Ubuntu or Debian VPS — guided prompts, 11 steps, one run. It covers creating a non-root admin user, locking down SSH, hardening the kernel, setting up a firewall, installing fail2ban, optional Tailscale setup, Docker, and automatic security updates. It logs everything it does so you have a full audit trail of what changed and when.
+Thankfully now I've fixed all your problems. I'm opening up my own quick script that walks you through hardening a fresh Ubuntu or Debian VPS — guided prompts, 12 steps, one run. It covers creating a non-root admin user, locking down SSH, hardening the kernel, setting up a firewall, installing fail2ban, optional Tailscale setup, Docker, automatic security updates, and scheduled maintenance. It logs everything it does so you have a full audit trail of what changed and when.
 
 No config files to write. No research rabbit holes. Just run it and answer the questions.
 
@@ -22,21 +22,9 @@ Set this up on every device you own and every server you run. Seriously. It crea
 
 ---
 
-## Inspiration and prior work
-
-This script was built on top of ideas and patterns from two projects worth knowing about:
-
-- **[akcryptoguy/vps-harden](https://github.com/akcryptoguy/vps-harden)** — a solid, straightforward VPS hardening script that covers the core bases clearly
-- **[ranjith-src/vps-harden](https://github.com/ranjith-src/vps-harden)** — a very thorough hardening script with extensive module coverage including sysctl hardening, auditd, SOPS secret management, and more. Worth reading if you want to go deeper than ironboot does
-
-Both are good references. If your requirements are more complex than what ironboot covers, ranjith-src's version in particular goes significantly further.
-
----
-
 ## Contents
 
 - [My recommended stack](#my-recommended-stack)
-- [Inspiration and prior work](#inspiration-and-prior-work)
 - [Who this is for](#who-this-is-for)
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
@@ -51,7 +39,8 @@ Both are good references. If your requirements are more complex than what ironbo
   - [Step 8 — Optional public SSH closure](#step-8--optional-public-ssh-closure)
   - [Step 9 — Docker](#step-9--docker)
   - [Step 10 — Automatic security updates](#step-10--automatic-security-updates)
-  - [Step 11 — Verification](#step-11--verification)
+  - [Step 11 — Scheduled maintenance](#step-11--scheduled-maintenance)
+  - [Step 12 — Verification](#step-12--verification)
 - [CLI reference](#cli-reference)
 - [Step names for --only and --skip](#step-names-for---only-and---skip)
 - [Common workflows](#common-workflows)
@@ -61,6 +50,7 @@ Both are good references. If your requirements are more complex than what ironbo
 - [Project structure](#project-structure)
 - [Roadmap](#roadmap)
 - [License](#license)
+- [Inspiration and prior work](#inspiration-and-prior-work)
 
 ---
 
@@ -99,19 +89,19 @@ Optional depending on which steps you enable:
 **1. Copy the script to your server**
 
 ```bash
-scp vps-bootstrap-v1.5.0.sh root@YOUR_SERVER_IP:~
+scp vps-bootstrap-v1.6.0.sh root@YOUR_SERVER_IP:~
 ```
 
 Or download it directly on the server:
 
 ```bash
-curl -O https://raw.githubusercontent.com/dshark3y/ironboot/main/vps-bootstrap-v1.5.0.sh
+curl -O https://raw.githubusercontent.com/dshark3y/ironboot/main/vps-bootstrap-v1.6.0.sh
 ```
 
 **2. Run it as root**
 
 ```bash
-sudo bash vps-bootstrap-v1.5.0.sh
+sudo bash vps-bootstrap-v1.6.0.sh
 ```
 
 **3. Follow the prompts**
@@ -124,7 +114,7 @@ Each step tells you what it's going to do before it does it. You can skip anythi
 
 ## What the script does
 
-11 steps in sequence. Every step is optional — skip any with `--skip`, or target a specific one with `--only`. Saying no to a step leaves the server clean. Nothing is done irreversibly without a warning first.
+12 steps in sequence. Every step is optional — skip any with `--skip`, or target a specific one with `--only`. Saying no to a step leaves the server clean. Nothing is done irreversibly without a warning first.
 
 ---
 
@@ -363,7 +353,51 @@ cat /run/reboot-required 2>/dev/null && echo "reboot needed" || echo "no reboot 
 
 ---
 
-### Step 11 — Verification
+### Step 11 — Scheduled maintenance
+
+**What it does**
+
+Generates a maintenance script at `/usr/local/bin/vps-maintenance` and registers it as a weekly cron job in `/etc/cron.d/vps-maintenance` (Sunday at 03:00). You choose which tasks to include:
+
+**Weekly full apt upgrade**
+
+Runs `apt-get update`, `apt-get upgrade`, and `apt-get autoremove`. This goes further than unattended-upgrades, which only applies security patches — this upgrades everything and removes unused packages.
+
+**Weekly Docker image updates**
+
+Pulls the latest image for every currently running container:
+
+```bash
+docker ps --format "{{.Image}}" | sort -u | while read -r img; do
+  docker pull "$img"
+done
+```
+
+**Weekly Docker prune**
+
+Removes dangling images and stopped containers to reclaim disk space. Equivalent to running `docker image prune -f && docker container prune -f` weekly without thinking about it.
+
+**Optional Docker Compose restart**
+
+If you provide a Compose project directory, the script runs `docker compose pull && docker compose up -d` in that directory after the image pull — so updated images are immediately in use, not just downloaded.
+
+**Generated files**
+
+| File | Purpose |
+|---|---|
+| `/usr/local/bin/vps-maintenance` | The maintenance script itself — readable and editable |
+| `/etc/cron.d/vps-maintenance` | Cron entry (Sunday 03:00, runs as root) |
+| `/var/log/vps-maintenance.log` | Output log, appended on each run |
+
+The maintenance script is plain bash. Open it, read it, edit it. It's yours.
+
+**Why separate from unattended-upgrades**
+
+Unattended-upgrades is designed for security patches only — it's conservative by design. The weekly full upgrade catches non-security package updates, removes accumulated package cruft, and handles Docker images that `unattended-upgrades` knows nothing about.
+
+---
+
+### Step 12 — Verification
 
 **What it does**
 
@@ -386,7 +420,7 @@ This doesn't replace testing manually. Open a new terminal and verify your own a
 ## CLI reference
 
 ```
-Usage: sudo bash vps-bootstrap-v1.5.0.sh [options]
+Usage: sudo bash vps-bootstrap-v1.6.0.sh [options]
 
 Options:
   --dry-run          Show what would happen without making any changes
@@ -401,7 +435,7 @@ Options:
 Preview every action without changing anything. Prompts still appear; all writes, installs, and service restarts show as `(dry-run)`. Run this first on any server that's not a clean install.
 
 ```bash
-sudo bash vps-bootstrap-v1.5.0.sh --dry-run
+sudo bash vps-bootstrap-v1.6.0.sh --dry-run
 ```
 
 ### `--verbose`
@@ -409,7 +443,7 @@ sudo bash vps-bootstrap-v1.5.0.sh --dry-run
 Stream command output live to the terminal instead of writing only to the log. Useful when a step is failing and you want to see what's happening.
 
 ```bash
-sudo bash vps-bootstrap-v1.5.0.sh --verbose
+sudo bash vps-bootstrap-v1.6.0.sh --verbose
 ```
 
 ### `--only`
@@ -417,7 +451,7 @@ sudo bash vps-bootstrap-v1.5.0.sh --verbose
 Run specific steps, skip everything else. Useful for re-running a single step on an already-configured server.
 
 ```bash
-sudo bash vps-bootstrap-v1.5.0.sh --only=docker,verify
+sudo bash vps-bootstrap-v1.6.0.sh --only=docker,verify
 ```
 
 ### `--skip`
@@ -425,7 +459,7 @@ sudo bash vps-bootstrap-v1.5.0.sh --only=docker,verify
 Run everything except the steps you name.
 
 ```bash
-sudo bash vps-bootstrap-v1.5.0.sh --skip=git,tailscale,close-ssh
+sudo bash vps-bootstrap-v1.6.0.sh --skip=git,tailscale,close-ssh
 ```
 
 ---
@@ -444,6 +478,7 @@ sudo bash vps-bootstrap-v1.5.0.sh --skip=git,tailscale,close-ssh
 | `close-ssh` | Remove public SSH firewall access |
 | `docker` | Docker Engine and Compose |
 | `auto-updates` | Unattended security upgrades |
+| `cron` | Scheduled maintenance jobs |
 | `verify` | Final verification checks |
 
 ---
@@ -452,10 +487,10 @@ sudo bash vps-bootstrap-v1.5.0.sh --skip=git,tailscale,close-ssh
 
 ### Fresh VPS — public SSH retained
 
-Admin user, hardened SSH, firewall, fail2ban, Docker, auto-updates. SSH stays on the internet on a custom port.
+Admin user, hardened SSH, firewall, fail2ban, Docker, auto-updates, scheduled maintenance. SSH stays on the internet on a custom port.
 
 ```bash
-sudo bash vps-bootstrap-v1.5.0.sh
+sudo bash vps-bootstrap-v1.6.0.sh
 ```
 
 Suggested answers:
@@ -469,6 +504,8 @@ Suggested answers:
 - Install Tailscale: **up to you** — I'd say yes
 - Install Docker: **yes** if you need it
 - Auto security updates: **yes**
+- Weekly apt upgrade cron: **yes**
+- Weekly Docker maintenance cron: **yes** if Docker is installed
 
 ---
 
@@ -477,7 +514,7 @@ Suggested answers:
 SSH never exposed to the internet. The server is only reachable through your Tailnet. This is how I run most of my own servers.
 
 ```bash
-sudo bash vps-bootstrap-v1.5.0.sh
+sudo bash vps-bootstrap-v1.6.0.sh
 ```
 
 Suggested answers:
@@ -498,13 +535,19 @@ Suggested answers:
 The script is safe to run multiple times. Adding Docker to an already-hardened server:
 
 ```bash
-sudo bash vps-bootstrap-v1.5.0.sh --only=docker,verify
+sudo bash vps-bootstrap-v1.6.0.sh --only=docker,verify
 ```
 
 Adding Tailscale later:
 
 ```bash
-sudo bash vps-bootstrap-v1.5.0.sh --only=tailscale
+sudo bash vps-bootstrap-v1.6.0.sh --only=tailscale
+```
+
+Setting up scheduled maintenance on an existing server:
+
+```bash
+sudo bash vps-bootstrap-v1.6.0.sh --only=cron
 ```
 
 ---
@@ -547,6 +590,19 @@ tailscale status
 tailscale ssh youruser@your-server-hostname
 ```
 
+**Scheduled maintenance:**
+
+```bash
+# View the generated maintenance script
+sudo cat /usr/local/bin/vps-maintenance
+
+# View the cron entry
+sudo cat /etc/cron.d/vps-maintenance
+
+# Check the maintenance log after the first run
+sudo tail -f /var/log/vps-maintenance.log
+```
+
 **Full audit log:**
 
 ```bash
@@ -564,6 +620,12 @@ Every run writes a timestamped log to `/var/log/`:
 ```
 
 The path is printed at startup and in the final summary. The log records every command run with its full arguments, every file written with path, mode and owner, every service restart, and every timestamped action. Created with `chmod 600` — only root can read it.
+
+The weekly maintenance job writes to its own log:
+
+```
+/var/log/vps-maintenance.log
+```
 
 ---
 
@@ -584,7 +646,7 @@ The path is printed at startup and in the final summary. The log records every c
 ```
 .
 ├── README.md
-└── vps-bootstrap-v1.5.0.sh
+└── vps-bootstrap-v1.6.0.sh
 ```
 
 Recommended additions:
@@ -594,7 +656,7 @@ Recommended additions:
 ├── README.md
 ├── LICENSE
 ├── CHANGELOG.md
-├── vps-bootstrap-v1.5.0.sh
+├── vps-bootstrap-v1.6.0.sh
 └── examples/
     ├── sample-output.txt
     └── tailscale-first-runbook.md
@@ -611,9 +673,21 @@ Recommended additions:
 - **Shellcheck CI** — automated linting before release
 - **Caddy / reverse proxy step** — optional setup for servers running web applications
 - **Rollback hints** — better guidance when a step fails mid-way
+- **Multiple Compose directories** — currently the cron step supports one Compose path; multi-stack support would be useful
 
 ---
 
 ## License
 
 MIT License. See `LICENSE` for details.
+
+---
+
+## Inspiration and prior work
+
+This script was built on top of ideas and patterns from two projects worth knowing about:
+
+- **[akcryptoguy/vps-harden](https://github.com/akcryptoguy/vps-harden)** — a solid, straightforward VPS hardening script that covers the core bases clearly
+- **[ranjith-src/vps-harden](https://github.com/ranjith-src/vps-harden)** — a very thorough hardening script with extensive module coverage including sysctl hardening, auditd, SOPS secret management, and more. Worth reading if you want to go deeper than ironboot does
+
+Both are good references. If your requirements are more complex than what ironboot covers, ranjith-src's version in particular goes significantly further.
