@@ -99,19 +99,19 @@ Optional depending on which steps you enable:
 **1. Copy the script to your server**
 
 ```bash
-scp vps-bootstrap-v1.4.1.sh root@YOUR_SERVER_IP:~
+scp vps-bootstrap-v1.5.0.sh root@YOUR_SERVER_IP:~
 ```
 
 Or download it directly on the server:
 
 ```bash
-curl -O https://raw.githubusercontent.com/dshark3y/ironboot/main/vps-bootstrap-v1.4.1.sh
+curl -O https://raw.githubusercontent.com/dshark3y/ironboot/main/vps-bootstrap-v1.5.0.sh
 ```
 
 **2. Run it as root**
 
 ```bash
-sudo bash vps-bootstrap-v1.4.1.sh
+sudo bash vps-bootstrap-v1.5.0.sh
 ```
 
 **3. Follow the prompts**
@@ -386,7 +386,7 @@ This doesn't replace testing manually. Open a new terminal and verify your own a
 ## CLI reference
 
 ```
-Usage: sudo bash vps-bootstrap-v1.4.1.sh [options]
+Usage: sudo bash vps-bootstrap-v1.5.0.sh [options]
 
 Options:
   --dry-run          Show what would happen without making any changes
@@ -401,7 +401,7 @@ Options:
 Preview every action without changing anything. Prompts still appear; all writes, installs, and service restarts show as `(dry-run)`. Run this first on any server that's not a clean install.
 
 ```bash
-sudo bash vps-bootstrap-v1.4.1.sh --dry-run
+sudo bash vps-bootstrap-v1.5.0.sh --dry-run
 ```
 
 ### `--verbose`
@@ -409,7 +409,7 @@ sudo bash vps-bootstrap-v1.4.1.sh --dry-run
 Stream command output live to the terminal instead of writing only to the log. Useful when a step is failing and you want to see what's happening.
 
 ```bash
-sudo bash vps-bootstrap-v1.4.1.sh --verbose
+sudo bash vps-bootstrap-v1.5.0.sh --verbose
 ```
 
 ### `--only`
@@ -417,7 +417,7 @@ sudo bash vps-bootstrap-v1.4.1.sh --verbose
 Run specific steps, skip everything else. Useful for re-running a single step on an already-configured server.
 
 ```bash
-sudo bash vps-bootstrap-v1.4.1.sh --only=docker,verify
+sudo bash vps-bootstrap-v1.5.0.sh --only=docker,verify
 ```
 
 ### `--skip`
@@ -425,7 +425,7 @@ sudo bash vps-bootstrap-v1.4.1.sh --only=docker,verify
 Run everything except the steps you name.
 
 ```bash
-sudo bash vps-bootstrap-v1.4.1.sh --skip=git,tailscale,close-ssh
+sudo bash vps-bootstrap-v1.5.0.sh --skip=git,tailscale,close-ssh
 ```
 
 ---
@@ -455,7 +455,7 @@ sudo bash vps-bootstrap-v1.4.1.sh --skip=git,tailscale,close-ssh
 Admin user, hardened SSH, firewall, fail2ban, Docker, auto-updates. SSH stays on the internet on a custom port.
 
 ```bash
-sudo bash vps-bootstrap-v1.4.1.sh
+sudo bash vps-bootstrap-v1.5.0.sh
 ```
 
 Suggested answers:
@@ -477,7 +477,7 @@ Suggested answers:
 SSH never exposed to the internet. The server is only reachable through your Tailnet. This is how I run most of my own servers.
 
 ```bash
-sudo bash vps-bootstrap-v1.4.1.sh
+sudo bash vps-bootstrap-v1.5.0.sh
 ```
 
 Suggested answers:
@@ -498,13 +498,13 @@ Suggested answers:
 The script is safe to run multiple times. Adding Docker to an already-hardened server:
 
 ```bash
-sudo bash vps-bootstrap-v1.4.1.sh --only=docker,verify
+sudo bash vps-bootstrap-v1.5.0.sh --only=docker,verify
 ```
 
 Adding Tailscale later:
 
 ```bash
-sudo bash vps-bootstrap-v1.4.1.sh --only=tailscale
+sudo bash vps-bootstrap-v1.5.0.sh --only=tailscale
 ```
 
 ---
@@ -584,7 +584,7 @@ The path is printed at startup and in the final summary. The log records every c
 ```
 .
 ├── README.md
-└── vps-bootstrap-v1.4.1.sh
+└── vps-bootstrap-v1.5.0.sh
 ```
 
 Recommended additions:
@@ -594,7 +594,7 @@ Recommended additions:
 ├── README.md
 ├── LICENSE
 ├── CHANGELOG.md
-├── vps-bootstrap-v1.4.1.sh
+├── vps-bootstrap-v1.5.0.sh
 └── examples/
     ├── sample-output.txt
     └── tailscale-first-runbook.md

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-SCRIPT_VERSION="1.4.1"
+SCRIPT_VERSION="1.5.0"
 
 VERBOSE=0
 DRY_RUN=0
@@ -321,7 +321,7 @@ parse_args() {
       --skip=*) SKIP_STEPS="$(parse_csv_flag "${1#*=}")" ;;
       -h|--help)
         cat <<'USAGE'
-Usage: sudo bash vps-bootstrap-v1.4.1.sh [options]
+Usage: sudo bash vps-bootstrap-v1.5.0.sh [options]
 
 Options:
   --dry-run          Show what would happen without making changes
