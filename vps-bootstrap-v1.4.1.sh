@@ -12,16 +12,20 @@ LOG_FILE="/var/log/vps-bootstrap-${TIMESTAMP}.log"
 SSH_SERVICE_NAME=""
 STEP_NUM=0
 
-# ── Colors ────────────────────────────────────────────────────────────────────
+# ── Colors (disabled when not running in a TTY) ───────────────────────────────
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-DIM='\033[2m'
-NC='\033[0m'
+if [[ -t 1 ]]; then
+  RED='\033[0;31m'
+  GREEN='\033[0;32m'
+  YELLOW='\033[1;33m'
+  BLUE='\033[0;34m'
+  CYAN='\033[0;36m'
+  BOLD='\033[1m'
+  DIM='\033[2m'
+  NC='\033[0m'
+else
+  RED='' GREEN='' YELLOW='' BLUE='' CYAN='' BOLD='' DIM='' NC=''
+fi
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -70,7 +74,7 @@ _spin_loop() {
 }
 
 spin_start() {
-  [[ "$DRY_RUN" -eq 1 || "$VERBOSE" -eq 1 ]] && return 0
+  [[ "$DRY_RUN" -eq 1 || "$VERBOSE" -eq 1 || ! -t 1 ]] && return 0
   tput civis 2>/dev/null || true
   _spin_loop "$1" &
   _spinner_pid=$!
@@ -186,7 +190,9 @@ command_exists() {
 ask_yes_no() {
   local prompt="$1"
   local default="${2:-Y}"
+  local hint="${3:-}"
   local reply
+  [[ -n "$hint" ]] && printf "  ${DIM}↳ %s${NC}\n" "$hint"
   while true; do
     if [[ "$default" == "Y" ]]; then
       read -r -p "  ${BOLD}?${NC}  ${prompt} ${DIM}[Y/n]${NC}: " reply
@@ -390,7 +396,7 @@ create_sudo_user() {
 
   section "Admin user setup" "Create or configure a non-root admin account with sudo. This is the account you should use for normal server administration instead of logging in as root."
 
-  if ! ask_yes_no "Create or configure a non-root sudo user?" "Y"; then
+  if ! ask_yes_no "Create or configure a non-root sudo user?" "Y" "Recommended — running everything as root means one mistake has full system consequences."; then
     NEW_USER="skipped"
     return 0
   fi
@@ -425,7 +431,7 @@ create_sudo_user() {
   run_cmd "Set SSH directory permissions for ${username}" chmod 700 "/home/${username}/.ssh"
   run_cmd "Set SSH directory ownership for ${username}" chown -R "${username}:${username}" "/home/${username}/.ssh"
 
-  if ask_yes_no "Copy root authorized_keys to '${username}' if present?" "Y"; then
+  if ask_yes_no "Copy root authorized_keys to '${username}' if present?" "Y" "Recommended — copies your existing SSH key so you can log in as the new user without re-adding it."; then
     if [[ -f /root/.ssh/authorized_keys ]]; then
       if [[ "$DRY_RUN" -eq 1 ]]; then
         printf "  ${YELLOW}◦${NC}  copy /root/.ssh/authorized_keys to /home/%s/.ssh/authorized_keys  ${DIM}(dry-run)${NC}\n" "$username"
@@ -457,7 +463,7 @@ configure_ssh() {
   current_port="$(awk '/^[#[:space:]]*Port[[:space:]]+[0-9]+/{print $2; exit}' /etc/ssh/sshd_config || true)"
   current_port="${current_port:-22}"
 
-  if ask_yes_no "Change SSH port from ${current_port}?" "N"; then
+  if ask_yes_no "Change SSH port from ${current_port}?" "N" "Optional — reduces automated scan noise. Common alternatives: 2222, 2293. Skip if port 22 is fine."; then
     while true; do
       desired_port="$(ask_input "Enter new SSH port" "2293")"
       validate_ssh_port "$desired_port" || { warn "Invalid port."; continue; }
@@ -474,7 +480,7 @@ configure_ssh() {
 
   if [[ "${NEW_USER:-}" == "skipped" || -z "${NEW_USER:-}" ]]; then
     warn "No non-root sudo user was created. Disabling root login could lock you out."
-    if ask_yes_no "Disable direct root SSH login?" "N"; then
+    if ask_yes_no "Disable direct root SSH login?" "N" "Risky without a non-root user. Only say yes if you have another way in (e.g. console access)."; then
       [[ "$DRY_RUN" -eq 0 ]] && set_sshd_option "PermitRootLogin" "no"
       ROOT_LOGIN_CHANGED="yes"
     else
@@ -482,7 +488,7 @@ configure_ssh() {
       ROOT_LOGIN_CHANGED="no"
     fi
   else
-    if ask_yes_no "Disable direct root SSH login?" "Y"; then
+    if ask_yes_no "Disable direct root SSH login?" "Y" "Recommended — your admin user handles everything; root should not be directly reachable over SSH."; then
       [[ "$DRY_RUN" -eq 0 ]] && set_sshd_option "PermitRootLogin" "no"
       ROOT_LOGIN_CHANGED="yes"
     else
@@ -509,7 +515,7 @@ configure_ssh() {
     warn "Password auth will remain enabled to prevent lockout. Add an SSH key first, then re-run with --only=ssh."
     [[ "$DRY_RUN" -eq 0 ]] && set_sshd_option "PasswordAuthentication" "yes"
     PASSWORD_AUTH_CHANGED="no (no SSH keys found)"
-  elif ask_yes_no "Disable SSH password authentication? Only do this if you have SSH keys or Tailscale SSH working." "N"; then
+  elif ask_yes_no "Disable SSH password authentication? Only do this if you have SSH keys or Tailscale SSH working." "N" "Recommended only if you have confirmed key-based SSH access. Locks out all password logins permanently."; then
     [[ "$DRY_RUN" -eq 0 ]] && set_sshd_option "PasswordAuthentication" "no"
     PASSWORD_AUTH_CHANGED="yes"
   else
@@ -552,7 +558,7 @@ configure_sysctl() {
 
   section "Kernel network hardening" "Apply kernel-level network security parameters. These settings reduce exposure to common network attacks without affecting normal server operation."
 
-  if ! ask_yes_no "Apply kernel network hardening?" "Y"; then
+  if ! ask_yes_no "Apply kernel network hardening?" "Y" "Recommended — low-risk settings, no impact on normal operation. Prevents SYN floods, ICMP redirects, and source routing."; then
     SYSCTL_RESULT="skipped"
     return 0
   fi
@@ -605,7 +611,7 @@ configure_ufw() {
 
   section "Firewall setup (UFW)" "Enable a default-deny firewall safely. SSH is allowed first on the active SSH port so the firewall does not cut off your current access."
 
-  if ! ask_yes_no "Enable and configure UFW?" "Y"; then
+  if ! ask_yes_no "Enable and configure UFW?" "Y" "Recommended — a default-deny firewall is one of the most effective baseline protections for any VPS."; then
     UFW_ENABLED_RESULT="skipped"
     return 0
   fi
@@ -617,20 +623,20 @@ configure_ufw() {
   run_cmd "Allow SSH port ${ssh_port} through UFW" ufw allow "${ssh_port}/tcp"
 
   if [[ "$ssh_port" != "22" ]]; then
-    if ask_yes_no "Also allow port 22 temporarily during testing?" "N"; then
+    if ask_yes_no "Also allow port 22 temporarily during testing?" "N" "Optional — useful as a fallback if the new port doesn't work. Remove it once you've confirmed the new port."; then
       run_cmd "Temporarily allow SSH port 22 through UFW" ufw allow 22/tcp
     fi
   fi
 
-  if ask_yes_no "Allow HTTP (80)?" "Y"; then
+  if ask_yes_no "Allow HTTP (80)?" "Y" "Yes if this server will serve websites or run a reverse proxy (Nginx, Traefik, Caddy)."; then
     run_cmd "Allow HTTP through UFW" ufw allow 80/tcp
   fi
 
-  if ask_yes_no "Allow HTTPS (443)?" "Y"; then
+  if ask_yes_no "Allow HTTPS (443)?" "Y" "Yes if this server will serve SSL/TLS traffic. Almost always yes if HTTP is also allowed."; then
     run_cmd "Allow HTTPS through UFW" ufw allow 443/tcp
   fi
 
-  if ask_yes_no "Apply SSH rate limiting on the active SSH port?" "Y"; then
+  if ask_yes_no "Apply SSH rate limiting on the active SSH port?" "Y" "Recommended — limits login attempts per IP, works alongside fail2ban to slow brute-force attacks."; then
     run_cmd "Apply SSH rate limiting in UFW" ufw limit "${ssh_port}/tcp"
   fi
 
@@ -655,7 +661,7 @@ install_fail2ban() {
 
   section "Brute-force protection (fail2ban)" "Install fail2ban to watch SSH login failures and temporarily block abusive IP addresses. This helps reduce automated attack noise."
 
-  if ! ask_yes_no "Install fail2ban?" "Y"; then
+  if ! ask_yes_no "Install fail2ban?" "Y" "Recommended — automatically bans IPs with repeated failed SSH login attempts."; then
     FAIL2BAN_RESULT="skipped"
     return 0
   fi
@@ -689,14 +695,14 @@ install_git_and_github_key() {
 
   section "Git and GitHub access" "Install git and optionally generate an SSH key for GitHub so the server can clone private repositories over SSH."
 
-  if ! ask_yes_no "Install git?" "Y"; then
+  if ! ask_yes_no "Install git?" "Y" "Recommended — you will almost certainly need git to manage code on this server."; then
     GITHUB_KEY_RESULT="skipped"
     return 0
   fi
 
   apt_install git openssh-client
 
-  if ! ask_yes_no "Generate a GitHub deploy SSH key for this server?" "Y"; then
+  if ! ask_yes_no "Generate a GitHub deploy SSH key for this server?" "Y" "Recommended if this server needs to pull from private GitHub repos."; then
     GITHUB_KEY_RESULT="skipped"
     return 0
   fi
@@ -743,7 +749,7 @@ install_tailscale() {
 
   section "Private access with Tailscale" "Install Tailscale so you can reach the server over your Tailnet. Tailscale SSH can later replace public SSH exposure if you want a tighter setup."
 
-  if ! ask_yes_no "Install Tailscale?" "N"; then
+  if ! ask_yes_no "Install Tailscale?" "N" "Recommended — adds the server to your private Tailnet, eliminating the need to expose SSH publicly."; then
     TAILSCALE_RESULT="skipped"
     TAILSCALE_SSH_RESULT="skipped"
     return 0
@@ -770,7 +776,7 @@ install_tailscale() {
   local ts_auth_key
   ts_auth_key="$(ask_input "Optional Tailscale auth key (leave blank for interactive login)" "")"
 
-  if ask_yes_no "Enable Tailscale SSH?" "Y"; then
+  if ask_yes_no "Enable Tailscale SSH?" "Y" "Recommended — lets you SSH over Tailscale so you can later close public SSH access entirely."; then
     if [[ -n "$ts_auth_key" ]]; then
       run_cmd "Bring up Tailscale with SSH enabled" tailscale up --authkey "$ts_auth_key" --ssh
     else
@@ -820,7 +826,7 @@ offer_close_public_ssh() {
   warn "Only close public SSH if you have already confirmed Tailscale SSH works from another terminal."
   warn "Do not do this based on assumption. Test first, then come back and say yes."
 
-  if ask_yes_no "Remove public SSH firewall access and leave SSH reachable only via Tailscale?" "N"; then
+  if ask_yes_no "Remove public SSH firewall access and leave SSH reachable only via Tailscale?" "N" "Only say yes if you have already confirmed Tailscale SSH works from another terminal right now."; then
     local ssh_port="${SSH_PORT_FINAL:-22}"
     run_cmd "Remove public SSH allow rule for active SSH port" ufw delete allow "${ssh_port}/tcp" || true
     run_cmd "Remove public SSH rate limit rule for active SSH port" ufw delete limit "${ssh_port}/tcp" || true
@@ -838,7 +844,7 @@ install_docker() {
 
   section "Docker runtime" "Install Docker Engine and Docker Compose so the VPS can run containerized services cleanly."
 
-  if ! ask_yes_no "Install Docker Engine and Docker Compose plugin?" "Y"; then
+  if ! ask_yes_no "Install Docker Engine and Docker Compose plugin?" "Y" "Yes if you plan to run containerised services. Installs the official Docker Engine, not the distro package."; then
     DOCKER_RESULT="skipped"
     return 0
   fi
@@ -887,7 +893,7 @@ install_auto_security_updates() {
 
   section "Automatic security updates" "Install unattended-upgrades so the server automatically pulls in security fixes. This reduces the chance of leaving known vulnerabilities unpatched."
 
-  if ! ask_yes_no "Install and configure unattended security upgrades?" "Y"; then
+  if ! ask_yes_no "Install and configure unattended security upgrades?" "Y" "Recommended — applies security patches automatically so known CVEs don't sit unpatched."; then
     AUTO_UPDATES_RESULT="skipped"
     return 0
   fi
