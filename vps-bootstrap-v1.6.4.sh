@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-SCRIPT_VERSION="1.6.3"
+SCRIPT_VERSION="1.6.4"
 
 VERBOSE=0
 DRY_RUN=0
@@ -1084,11 +1084,14 @@ verify_setup() {
 }
 
 final_notes() {
-  local display_user
-  if [[ -z "${NEW_USER:-}" || "${NEW_USER}" == "skipped" ]]; then
-    display_user="root"
-  else
+  # Pick the most accurate login example based on what's actually available.
+  # If a non-root user was created/configured this run, use them.
+  # Otherwise, only suggest root if root login is still allowed.
+  local display_user=""
+  if [[ -n "${NEW_USER:-}" && "${NEW_USER}" != "skipped" ]]; then
     display_user="$NEW_USER"
+  elif [[ "${ROOT_LOGIN_CHANGED:-no}" != "yes" ]]; then
+    display_user="root"
   fi
 
   echo
@@ -1096,7 +1099,11 @@ final_notes() {
   printf "  ${DIM}──────────────────────────────────────────────${NC}\n"
   printf "  ${CYAN}1.${NC}  Open a new terminal before closing your current session.\n"
   printf "  ${CYAN}2.${NC}  Test SSH again:\n"
-  if [[ "${TAILSCALE_SSH_RESULT:-no}" == "yes" ]]; then
+  if [[ -z "$display_user" ]]; then
+    printf "       ${YELLOW}Root login is disabled and no admin user was set up in this run.${NC}\n"
+    printf "       ${DIM}Use an existing admin account: ssh YOUR_USER@SERVER_IP -p %s${NC}\n" "${SSH_PORT_FINAL:-22}"
+    printf "       ${DIM}If locked out, restore /etc/ssh/sshd_config.bak.* and restart SSH.${NC}\n"
+  elif [[ "${TAILSCALE_SSH_RESULT:-no}" == "yes" ]]; then
     printf "       ${DIM}tailscale ssh %s@%s${NC}\n" "$display_user" "${HOSTNAME}"
   else
     printf "       ${DIM}ssh %s@SERVER_IP -p %s${NC}\n" "$display_user" "${SSH_PORT_FINAL:-22}"
