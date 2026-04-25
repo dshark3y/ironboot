@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-SCRIPT_VERSION="1.6.2"
+SCRIPT_VERSION="1.6.3"
 
 VERBOSE=0
 DRY_RUN=0
@@ -542,6 +542,12 @@ configure_ssh() {
     printf "  ${YELLOW}◦${NC}  validate and restart SSH service  ${DIM}(dry-run)${NC}\n"
     return 0
   fi
+
+  # Ensure SSH privilege separation directory exists before validation.
+  # On Ubuntu 24.04 with socket-activated SSH, /run/sshd may not exist
+  # until a connection is made — sshd -t fails without it.
+  mkdir -p /run/sshd
+  chmod 0755 /run/sshd
 
   if sshd -t; then
     restart_ssh_service
