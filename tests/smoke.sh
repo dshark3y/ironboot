@@ -46,7 +46,7 @@ grep -q 'APT::Periodic::Unattended-Upgrade "1";' ironboot.sh
 grep -q 'Unattended-Upgrade::Automatic-Reboot "false";' ironboot.sh
 
 if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
-  if ! dry_run_output="$(sudo bash ironboot.sh --dry-run --yes --only=auto-updates 2>&1)"; then
+  if ! dry_run_output="$(sudo -n bash ironboot.sh --dry-run --yes --only=auto-updates 2>&1)"; then
     echo "Dry-run auto-updates command failed" >&2
     echo "--- output ---" >&2
     printf '%s\n' "$dry_run_output" >&2
