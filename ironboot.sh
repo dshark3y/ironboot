@@ -1,16 +1,37 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-SCRIPT_VERSION="1.6.4"
+SCRIPT_VERSION="1.7.0"
+SCRIPT_NAME="$(basename "$0")"
 
 VERBOSE=0
 DRY_RUN=0
+ASSUME_YES=0
 ONLY_STEPS=""
 SKIP_STEPS=""
+SSH_PORT_OVERRIDE=""
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
-LOG_FILE="/var/log/vps-bootstrap-${TIMESTAMP}.log"
+LOG_FILE="/var/log/ironboot-${TIMESTAMP}.log"
 SSH_SERVICE_NAME=""
+SSH_CONFIG_TARGET_BACKED_UP=0
+LOG_READY=0
 STEP_NUM=0
+
+ALL_STEPS=(
+  system-update
+  user
+  ssh
+  sysctl
+  ufw
+  fail2ban
+  git
+  tailscale
+  close-ssh
+  docker
+  auto-updates
+  cron
+  verify
+)
 
 # ── Colors (disabled when not running in a TTY) ───────────────────────────────
 
@@ -32,7 +53,7 @@ fi
 safe_write_log() {
   local level="$1"
   shift || true
-  if [[ -n "${LOG_FILE:-}" ]]; then
+  if [[ "$LOG_READY" -eq 1 && -n "${LOG_FILE:-}" ]]; then
     printf '[%s] [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$level" "$*" >> "$LOG_FILE" 2>/dev/null || true
   fi
 }
@@ -55,7 +76,8 @@ init_log() {
   mkdir -p /var/log
   touch "$LOG_FILE"
   chmod 600 "$LOG_FILE"
-  safe_write_log INFO "Bootstrap log started"
+  LOG_READY=1
+  safe_write_log INFO "ironboot log started"
 }
 
 # ── Spinner ───────────────────────────────────────────────────────────────────
@@ -125,7 +147,7 @@ cleanup_on_error() {
   spin_stop
   tput cnorm 2>/dev/null || true
   if [[ $rc -ne 0 ]]; then
-    err "Bootstrap failed. Review log: $LOG_FILE"
+    err "ironboot failed. Review log: $LOG_FILE"
   fi
   exit $rc
 }
@@ -136,9 +158,39 @@ parse_csv_flag() {
   printf '%s' "$raw"
 }
 
+step_names_csv() {
+  local IFS=,
+  printf '%s' "${ALL_STEPS[*]}"
+}
+
+is_valid_step() {
+  local step="$1"
+  local item
+  for item in "${ALL_STEPS[@]}"; do
+    [[ "$item" == "$step" ]] && return 0
+  done
+  return 1
+}
+
+validate_step_list() {
+  local flag_name="$1"
+  local raw="$2"
+  local item
+  local -a step_arr
+
+  [[ -n "$raw" ]] || die "${flag_name} requires at least one step. Valid steps: $(step_names_csv)"
+
+  IFS=',' read -r -a step_arr <<< "$raw"
+  for item in "${step_arr[@]}"; do
+    [[ -n "$item" ]] || die "${flag_name} contains an empty step. Valid steps: $(step_names_csv)"
+    is_valid_step "$item" || die "Unknown step '${item}' in ${flag_name}. Valid steps: $(step_names_csv)"
+  done
+}
+
 should_run_step() {
   local step="$1"
   local item
+  local -a only_arr skip_arr
 
   if [[ -n "$ONLY_STEPS" ]]; then
     IFS=',' read -r -a only_arr <<< "$ONLY_STEPS"
@@ -179,7 +231,7 @@ write_file() {
 
 require_root() {
   if [[ "${EUID}" -ne 0 ]]; then
-    die "Run this script as root. Example: sudo bash $0"
+    die "Run this script as root. Example: sudo bash ${SCRIPT_NAME}"
   fi
 }
 
@@ -193,6 +245,16 @@ ask_yes_no() {
   local hint="${3:-}"
   local reply
   [[ -n "$hint" ]] && printf "  ${DIM}↳ %s${NC}\n" "$hint"
+
+  if [[ "$ASSUME_YES" -eq 1 ]]; then
+    if [[ "$default" == "Y" ]]; then
+      printf "  ${BOLD}?${NC}  %s ${DIM}[Y/n]${NC}: Y ${DIM}(--yes)${NC}\n" "$prompt"
+      return 0
+    fi
+    printf "  ${BOLD}?${NC}  %s ${DIM}[y/N]${NC}: N ${DIM}(--yes default)${NC}\n" "$prompt"
+    return 1
+  fi
+
   while true; do
     if [[ "$default" == "Y" ]]; then
       read -r -p "  ${BOLD}?${NC}  ${prompt} ${DIM}[Y/n]${NC}: " reply
@@ -230,10 +292,46 @@ backup_file() {
   cp "$f" "${f}.bak.${ts}"
 }
 
+sshd_dropin_supported() {
+  [[ -d /etc/ssh/sshd_config.d ]] || return 1
+  [[ -f /etc/ssh/sshd_config ]] || return 1
+  grep -Eq '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf' /etc/ssh/sshd_config
+}
+
+managed_sshd_config_file() {
+  if sshd_dropin_supported; then
+    printf '%s\n' "/etc/ssh/sshd_config.d/99-ironboot.conf"
+  else
+    printf '%s\n' "/etc/ssh/sshd_config"
+  fi
+}
+
+ensure_sshd_dropin_header() {
+  local file="$1"
+  [[ "$file" == "/etc/ssh/sshd_config.d/99-ironboot.conf" ]] || return 0
+  [[ -f "$file" ]] && return 0
+
+  {
+    printf '# Managed by ironboot. Local edits may be overwritten by reruns.\n'
+    printf '# SSH hardening and port settings.\n'
+  } > "$file"
+  chmod 644 "$file"
+  safe_write_log INFO "WROTE FILE: $file mode=644 owner=root:root"
+}
+
 set_sshd_option() {
   local key="$1"
   local value="$2"
-  local file="/etc/ssh/sshd_config"
+  local file
+  file="$(managed_sshd_config_file)"
+
+  if [[ "$SSH_CONFIG_TARGET_BACKED_UP" -eq 0 ]]; then
+    backup_file "$file"
+    SSH_CONFIG_TARGET_BACKED_UP=1
+  fi
+
+  ensure_sshd_dropin_header "$file"
+
   if grep -Eq "^[#[:space:]]*${key}[[:space:]]+" "$file"; then
     sed -i -E "s|^[#[:space:]]*${key}[[:space:]]+.*|${key} ${value}|g" "$file"
   else
@@ -255,7 +353,7 @@ apt_install() {
 apt_install_quiet() {
   export DEBIAN_FRONTEND=noninteractive
   local log_tmp
-  log_tmp="$(mktemp /tmp/vps-bootstrap-apt-XXXXXX.log)"
+  log_tmp="$(mktemp /tmp/ironboot-apt-XXXXXX.log)"
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
     printf "  ${YELLOW}◦${NC}  install packages: %s  ${DIM}(dry-run)${NC}\n" "$*"
@@ -312,33 +410,94 @@ restart_ssh_service() {
   run_cmd "Restart SSH service" systemctl restart "$SSH_SERVICE_NAME"
 }
 
+detect_current_ssh_port() {
+  if [[ -n "$SSH_PORT_OVERRIDE" ]]; then
+    printf '%s' "$SSH_PORT_OVERRIDE"
+    return 0
+  fi
+
+  local port=""
+  if [[ -f /etc/ssh/sshd_config.d/99-ironboot.conf ]]; then
+    port="$(awk '/^[[:space:]]*Port[[:space:]]+[0-9]+/ {print $2; exit}' /etc/ssh/sshd_config.d/99-ironboot.conf 2>/dev/null || true)"
+    if [[ -n "$port" ]]; then
+      printf '%s' "$port"
+      return 0
+    fi
+  fi
+
+  local config_files=()
+  [[ -f /etc/ssh/sshd_config ]] && config_files+=("/etc/ssh/sshd_config")
+
+  if [[ -d /etc/ssh/sshd_config.d ]]; then
+    local dropin
+    shopt -s nullglob
+    for dropin in /etc/ssh/sshd_config.d/*.conf; do
+      config_files+=("$dropin")
+    done
+    shopt -u nullglob
+  fi
+
+  if [[ "${#config_files[@]}" -gt 0 ]]; then
+    port="$(awk '/^[[:space:]]*Port[[:space:]]+[0-9]+/ {print $2; exit}' "${config_files[@]}" 2>/dev/null || true)"
+  fi
+
+  printf '%s' "${port:-22}"
+}
+
+current_ssh_port() {
+  printf '%s' "${SSH_PORT_FINAL:-$(detect_current_ssh_port)}"
+}
+
+tailscale_is_available() {
+  command_exists tailscale && tailscale status >/dev/null 2>&1
+}
+
+print_help() {
+  cat <<USAGE
+Usage: sudo bash ${SCRIPT_NAME} [options]
+
+Options:
+  --dry-run          Show what would happen without making changes
+  --verbose          Stream command output to the terminal and log
+  --yes              Accept prompt defaults without interactive confirmation
+  --ssh-port=PORT    Override detected SSH port for firewall/fail2ban reruns
+  --only=a,b,c       Run only selected steps
+  --skip=a,b,c       Skip selected steps
+  --version          Print version and exit
+  -h, --help         Show this help
+
+Step names:
+  $(step_names_csv)
+USAGE
+}
+
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --dry-run) DRY_RUN=1 ;;
       --verbose) VERBOSE=1 ;;
+      --yes) ASSUME_YES=1 ;;
+      --ssh-port=*)
+        SSH_PORT_OVERRIDE="${1#*=}"
+        validate_ssh_port "$SSH_PORT_OVERRIDE" || die "Invalid --ssh-port value: ${SSH_PORT_OVERRIDE}"
+        ;;
       --only=*) ONLY_STEPS="$(parse_csv_flag "${1#*=}")" ;;
       --skip=*) SKIP_STEPS="$(parse_csv_flag "${1#*=}")" ;;
+      --version)
+        printf '%s\n' "$SCRIPT_VERSION"
+        exit 0
+        ;;
       -h|--help)
-        cat <<'USAGE'
-Usage: sudo bash vps-bootstrap-v1.5.0.sh [options]
-
-Options:
-  --dry-run          Show what would happen without making changes
-  --verbose          Stream command output to the terminal and log
-  --only=a,b,c       Run only selected steps
-  --skip=a,b,c       Skip selected steps
-  -h, --help         Show this help
-
-Step names:
-  user,ssh,sysctl,ufw,fail2ban,git,tailscale,close-ssh,docker,auto-updates,cron,verify
-USAGE
+        print_help
         exit 0
         ;;
       *) die "Unknown argument: $1" ;;
     esac
     shift
   done
+
+  [[ -n "$ONLY_STEPS" ]] && validate_step_list "--only" "$ONLY_STEPS"
+  [[ -n "$SKIP_STEPS" ]] && validate_step_list "--skip" "$SKIP_STEPS"
 }
 
 # ── Summary ───────────────────────────────────────────────────────────────────
@@ -359,16 +518,20 @@ _summary_row() {
 }
 
 print_summary() {
+  local ssh_summary_port
+  ssh_summary_port="$(current_ssh_port)"
+
   echo
   printf "  ${BOLD}Summary${NC}\n"
   printf "  ${DIM}──────────────────────────────────────────────${NC}\n"
 
+  _summary_row "System update"            "${SYSTEM_UPDATE_RESULT:-no}"
   if [[ "${NEW_USER:-}" == "skipped" ]]; then
     _summary_row "Admin account"          "root (no new user created)"
   else
     _summary_row "Admin user"             "${NEW_USER:-not created}"
   fi
-  _summary_row "SSH port"                 "${SSH_PORT_FINAL:-unchanged}"
+  _summary_row "SSH port"                 "$ssh_summary_port"
   _summary_row "Root login disabled"      "${ROOT_LOGIN_CHANGED:-no}"
   _summary_row "Password auth disabled"   "${PASSWORD_AUTH_CHANGED:-no}"
   _summary_row "Kernel hardening"         "${SYSCTL_RESULT:-no}"
@@ -388,6 +551,25 @@ print_summary() {
 }
 
 # ── Steps ─────────────────────────────────────────────────────────────────────
+
+run_system_update() {
+  if ! should_run_step "system-update"; then
+    log "Skipping step: system-update"
+    return 0
+  fi
+
+  section "System package update" "Refresh apt package lists and upgrade installed packages. This runs during full bootstrap, but not during narrow --only reruns unless explicitly selected."
+
+  if ! ask_yes_no "Update apt package lists and upgrade installed packages?" "Y" "Recommended on a fresh VPS. For existing production servers, run this deliberately rather than as a side effect of another step."; then
+    SYSTEM_UPDATE_RESULT="skipped"
+    return 0
+  fi
+
+  export DEBIAN_FRONTEND=noninteractive
+  run_cmd "Update apt package lists" apt-get update -y
+  run_cmd "Upgrade installed packages" apt-get upgrade -y
+  SYSTEM_UPDATE_RESULT="yes"
+}
 
 create_sudo_user() {
   if ! should_run_step "user"; then
@@ -461,10 +643,12 @@ configure_ssh() {
   backup_file /etc/ssh/sshd_config
 
   local current_port desired_port
-  current_port="$(awk '/^[#[:space:]]*Port[[:space:]]+[0-9]+/{print $2; exit}' /etc/ssh/sshd_config || true)"
-  current_port="${current_port:-22}"
+  current_port="$(detect_current_ssh_port)"
 
-  if ask_yes_no "Change SSH port from ${current_port}?" "N" "Optional — reduces automated scan noise. Common alternatives: 2222, 2293. Skip if port 22 is fine."; then
+  if [[ -n "$SSH_PORT_OVERRIDE" ]]; then
+    desired_port="$SSH_PORT_OVERRIDE"
+    log "Using SSH port from --ssh-port=${SSH_PORT_OVERRIDE}."
+  elif ask_yes_no "Change SSH port from ${current_port}?" "N" "Optional — reduces automated scan noise. Common alternatives: 2222, 2293. Skip if port 22 is fine."; then
     while true; do
       desired_port="$(ask_input "Enter new SSH port" "2293")"
       validate_ssh_port "$desired_port" || { warn "Invalid port."; continue; }
@@ -570,8 +754,9 @@ configure_sysctl() {
     return 0
   fi
 
-  write_file /etc/sysctl.d/99-vps-bootstrap.conf 644 root:root <<'EOF2'
-# VPS Bootstrap — kernel network hardening
+  write_file /etc/sysctl.d/99-ironboot.conf 644 root:root <<'EOF2'
+# Managed by ironboot. Local edits may be overwritten by reruns.
+# ironboot kernel network hardening
 
 # SYN flood protection
 net.ipv4.tcp_syncookies = 1
@@ -625,7 +810,8 @@ configure_ufw() {
 
   apt_install ufw
 
-  local ssh_port="${SSH_PORT_FINAL:-22}"
+  local ssh_port
+  ssh_port="$(current_ssh_port)"
   log "Allowing SSH first so you do not lock yourself out..."
   run_cmd "Allow SSH port ${ssh_port} through UFW" ufw allow "${ssh_port}/tcp"
 
@@ -676,13 +862,17 @@ install_fail2ban() {
   apt_install_quiet fail2ban
   run_cmd "Create fail2ban jail.d directory" mkdir -p /etc/fail2ban/jail.d
 
+  local ssh_port
+  ssh_port="$(current_ssh_port)"
+
   write_file /etc/fail2ban/jail.d/sshd-local.conf 644 root:root <<EOF2
+# Managed by ironboot. Local edits may be overwritten by reruns.
 [DEFAULT]
 banaction = ufw
 
 [sshd]
 enabled  = true
-port     = ${SSH_PORT_FINAL:-22}
+port     = ${ssh_port}
 maxretry = 3
 bantime  = 3h
 findtime = 10m
@@ -691,7 +881,7 @@ EOF2
   run_cmd "Enable fail2ban service" systemctl enable fail2ban
   run_cmd "Restart fail2ban service" systemctl restart fail2ban
   FAIL2BAN_RESULT="yes"
-  ok "fail2ban installed and configured for SSH port ${SSH_PORT_FINAL:-22}."
+  ok "fail2ban installed and configured for SSH port ${ssh_port}."
 }
 
 install_git_and_github_key() {
@@ -720,20 +910,34 @@ install_git_and_github_key() {
   else
     target_user="root"
   fi
-  home_dir="$(eval echo "~${target_user}")"
+  home_dir="$(getent passwd "$target_user" | cut -d: -f6)"
+  [[ -n "$home_dir" ]] || die "Could not determine home directory for ${target_user}."
   key_comment="$(ask_input "Key comment for GitHub" "${HOSTNAME:-server}")"
 
-  run_cmd "Create .ssh directory for ${target_user}" su - "$target_user" -c 'mkdir -p ~/.ssh && chmod 700 ~/.ssh'
+  run_cmd "Create .ssh directory for ${target_user}" mkdir -p "${home_dir}/.ssh"
+  run_cmd "Set .ssh permissions for ${target_user}" chmod 700 "${home_dir}/.ssh"
+  run_cmd "Set .ssh ownership for ${target_user}" chown -R "${target_user}:${target_user}" "${home_dir}/.ssh"
 
   if [[ -f "${home_dir}/.ssh/id_ed25519" ]]; then
     warn "SSH key already exists at ${home_dir}/.ssh/id_ed25519"
   else
-    run_cmd "Generate GitHub deploy key for ${target_user}" su - "$target_user" -c "ssh-keygen -t ed25519 -C '${key_comment}' -f ~/.ssh/id_ed25519 -N ''"
+    run_cmd "Generate GitHub deploy key for ${target_user}" ssh-keygen -t ed25519 -C "$key_comment" -f "${home_dir}/.ssh/id_ed25519" -N ""
+    run_cmd "Set deploy key ownership for ${target_user}" chown "${target_user}:${target_user}" "${home_dir}/.ssh/id_ed25519" "${home_dir}/.ssh/id_ed25519.pub"
     ok "Deploy key created for ${target_user}."
   fi
 
   warn "Adding GitHub to known_hosts using ssh-keyscan. This is convenient, but pinned host keys are stricter."
-  run_cmd "Add GitHub to known_hosts for ${target_user}" su - "$target_user" -c 'ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null && chmod 600 ~/.ssh/known_hosts'
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    printf "  ${YELLOW}◦${NC}  add GitHub to known_hosts for %s  ${DIM}(dry-run)${NC}\n" "$target_user"
+  else
+    if ssh-keyscan github.com >> "${home_dir}/.ssh/known_hosts" 2>> "$LOG_FILE"; then
+      chown "${target_user}:${target_user}" "${home_dir}/.ssh/known_hosts"
+      chmod 600 "${home_dir}/.ssh/known_hosts"
+      ok "Added GitHub to known_hosts for ${target_user}."
+    else
+      die "Could not add GitHub to known_hosts. Review log: $LOG_FILE"
+    fi
+  fi
 
   echo
   printf "  ${BOLD}Add this public key to GitHub:${NC}\n\n"
@@ -771,9 +975,13 @@ install_tailscale() {
       printf "  ${YELLOW}◦${NC}  install Tailscale  ${DIM}(dry-run)${NC}\n"
     else
       spin_start "Installing Tailscale"
-      curl -fsSL https://tailscale.com/install.sh | sh >> "$LOG_FILE" 2>&1
-      spin_stop
-      printf "  ${GREEN}✔${NC}  Tailscale installed\n"
+      if curl -fsSL https://tailscale.com/install.sh | sh >> "$LOG_FILE" 2>&1; then
+        spin_stop
+        printf "  ${GREEN}✔${NC}  Tailscale installed\n"
+      else
+        spin_stop
+        die "Tailscale install failed. Review log: $LOG_FILE"
+      fi
     fi
   fi
 
@@ -826,16 +1034,21 @@ offer_close_public_ssh() {
     return 0
   fi
 
-  if [[ "${TAILSCALE_SSH_RESULT:-no}" != "yes" ]]; then
-    log "Skipping close-ssh because Tailscale SSH is not enabled in this run."
+  if [[ "${TAILSCALE_SSH_RESULT:-no}" != "yes" ]] && ! tailscale_is_available; then
+    log "Skipping close-ssh because Tailscale is not connected."
     return 0
+  fi
+
+  if [[ "${TAILSCALE_SSH_RESULT:-no}" != "yes" ]]; then
+    warn "Tailscale appears connected, but this run did not enable Tailscale SSH."
   fi
 
   warn "Only close public SSH if you have already confirmed Tailscale SSH works from another terminal."
   warn "Do not do this based on assumption. Test first, then come back and say yes."
 
   if ask_yes_no "Remove public SSH firewall access and leave SSH reachable only via Tailscale?" "N" "Only say yes if you have already confirmed Tailscale SSH works from another terminal right now."; then
-    local ssh_port="${SSH_PORT_FINAL:-22}"
+    local ssh_port
+    ssh_port="$(current_ssh_port)"
     run_cmd "Remove public SSH allow rule for active SSH port" ufw delete allow "${ssh_port}/tcp" || true
     run_cmd "Remove public SSH rate limit rule for active SSH port" ufw delete limit "${ssh_port}/tcp" || true
     run_cmd "Remove public OpenSSH rule" ufw delete allow OpenSSH || true
@@ -865,17 +1078,22 @@ install_docker() {
       printf "  ${YELLOW}◦${NC}  fetch Docker GPG key  ${DIM}(dry-run)${NC}\n"
     else
       spin_start "Fetching Docker GPG key"
-      curl -fsSL "https://download.docker.com/linux/${OS_ID}/gpg" | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-      chmod a+r /etc/apt/keyrings/docker.gpg
-      spin_stop
-      printf "  ${GREEN}✔${NC}  Docker GPG key fetched\n"
-      safe_write_log INFO "Fetched Docker GPG key"
+      if curl -fsSL "https://download.docker.com/linux/${OS_ID}/gpg" | gpg --dearmor -o /etc/apt/keyrings/docker.gpg; then
+        chmod a+r /etc/apt/keyrings/docker.gpg
+        spin_stop
+        printf "  ${GREEN}✔${NC}  Docker GPG key fetched\n"
+        safe_write_log INFO "Fetched Docker GPG key"
+      else
+        spin_stop
+        die "Docker GPG key fetch failed. Review log: $LOG_FILE"
+      fi
     fi
   fi
 
   [[ -n "${OS_CODENAME:-}" ]] || die "Could not determine Ubuntu/Debian codename for Docker repo."
 
   write_file /etc/apt/sources.list.d/docker.list 644 root:root <<EOF2
+# Managed by ironboot. Local edits may be overwritten by reruns.
 deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/${OS_ID} ${OS_CODENAME} stable
 EOF2
 
@@ -909,6 +1127,7 @@ install_auto_security_updates() {
   apt_install unattended-upgrades apt-listchanges
 
   write_file /etc/apt/apt.conf.d/20auto-upgrades 644 root:root <<'EOF2'
+// Managed by ironboot. Local edits may be overwritten by reruns.
 APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Download-Upgradeable-Packages "1";
 APT::Periodic::AutocleanInterval "7";
@@ -916,6 +1135,7 @@ APT::Periodic::Unattended-Upgrade "1";
 EOF2
 
   write_file /etc/apt/apt.conf.d/52unattended-upgrades-local 644 root:root <<'EOF2'
+// Managed by ironboot. Local edits may be overwritten by reruns.
 Unattended-Upgrade::Automatic-Reboot "false";
 Unattended-Upgrade::Remove-Unused-Dependencies "true";
 Unattended-Upgrade::Mail "";
@@ -966,6 +1186,7 @@ install_cron_jobs() {
 
   {
     printf '#!/usr/bin/env bash\n'
+    printf '# Managed by ironboot. Local edits may be overwritten by reruns.\n'
     printf '# ironboot vps-maintenance — generated %s\n' "$(date)"
     printf '# Edit this file to change what runs on the weekly maintenance schedule.\n'
     printf 'set -euo pipefail\n'
@@ -1017,6 +1238,7 @@ install_cron_jobs() {
   safe_write_log INFO "WROTE FILE: /usr/local/bin/vps-maintenance"
 
   write_file /etc/cron.d/vps-maintenance 644 root:root <<'CRONEOF'
+# Managed by ironboot. Local edits may be overwritten by reruns.
 # ironboot vps-maintenance — weekly Sunday 03:00
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
@@ -1088,6 +1310,8 @@ final_notes() {
   # If a non-root user was created/configured this run, use them.
   # Otherwise, only suggest root if root login is still allowed.
   local display_user=""
+  local ssh_port
+  ssh_port="$(current_ssh_port)"
   if [[ -n "${NEW_USER:-}" && "${NEW_USER}" != "skipped" ]]; then
     display_user="$NEW_USER"
   elif [[ "${ROOT_LOGIN_CHANGED:-no}" != "yes" ]]; then
@@ -1101,12 +1325,12 @@ final_notes() {
   printf "  ${CYAN}2.${NC}  Test SSH again:\n"
   if [[ -z "$display_user" ]]; then
     printf "       ${YELLOW}Root login is disabled and no admin user was set up in this run.${NC}\n"
-    printf "       ${DIM}Use an existing admin account: ssh YOUR_USER@SERVER_IP -p %s${NC}\n" "${SSH_PORT_FINAL:-22}"
+    printf "       ${DIM}Use an existing admin account: ssh YOUR_USER@SERVER_IP -p %s${NC}\n" "$ssh_port"
     printf "       ${DIM}If locked out, restore /etc/ssh/sshd_config.bak.* and restart SSH.${NC}\n"
   elif [[ "${TAILSCALE_SSH_RESULT:-no}" == "yes" ]]; then
     printf "       ${DIM}tailscale ssh %s@%s${NC}\n" "$display_user" "${HOSTNAME}"
   else
-    printf "       ${DIM}ssh %s@SERVER_IP -p %s${NC}\n" "$display_user" "${SSH_PORT_FINAL:-22}"
+    printf "       ${DIM}ssh %s@SERVER_IP -p %s${NC}\n" "$display_user" "$ssh_port"
   fi
   printf "  ${CYAN}3.${NC}  Check firewall:\n"
   printf "       ${DIM}sudo ufw status verbose${NC}\n"
@@ -1134,7 +1358,7 @@ main() {
   detect_os
 
   echo
-  printf "  ${GREEN}${BOLD}▸  VPS Bootstrap${NC}\n"
+  printf "  ${GREEN}${BOLD}▸  ironboot${NC}\n"
   printf "     ${CYAN}v%s${NC}  ${DIM}·  %s${NC}\n" "$SCRIPT_VERSION" "${PRETTY_NAME}"
   printf "  ${BLUE}──────────────────────────────────────────────${NC}\n"
   printf "  ${DIM}Log:  %s${NC}\n" "$LOG_FILE"
@@ -1151,9 +1375,8 @@ main() {
   fi
 
   export DEBIAN_FRONTEND=noninteractive
-  run_cmd "Update apt package lists" apt-get update -y
-  run_cmd "Upgrade installed packages" apt-get upgrade -y
 
+  run_system_update
   create_sudo_user
   configure_ssh
   configure_sysctl
@@ -1169,7 +1392,7 @@ main() {
 
   print_summary
   final_notes
-  ok "Bootstrap complete."
+  ok "ironboot complete."
 }
 
 main "$@"

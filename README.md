@@ -2,7 +2,7 @@
 
 I see many people setting up [OpenClaw](https://openclaw.ai), or hosting vibecoded projects and more. I've been working on servers for many years, hosting my own services, mainly on bare metal blank servers. I used to go through a process of step by step setup of these servers, meeting the bare minimum criteria for safe usage. Stuff like non-root user, closing ports, setting up Tailscale (highly recommend), installing fail2ban, turning off root. If you're not doing any of these things, it's an issue.
 
-Thankfully now I've fixed all your problems. I'm opening up my own quick script that walks you through hardening a fresh Ubuntu or Debian VPS - guided prompts, 12 steps, one run. It covers creating a non-root admin user, locking down SSH, hardening the kernel, setting up a firewall, installing fail2ban, optional Tailscale setup, Docker, automatic security updates, and scheduled maintenance. It logs everything it does so you have a full audit trail of what changed and when.
+Thankfully now I've fixed all your problems. I'm opening up my own quick script that walks you through hardening a fresh Ubuntu or Debian VPS - guided prompts, 13 steps, one run. It covers package updates, creating a non-root admin user, locking down SSH, hardening the kernel, setting up a firewall, installing fail2ban, optional Tailscale setup, Docker, automatic security updates, and scheduled maintenance. It logs everything it does so you have a full audit trail of what changed and when.
 
 No config files to write. No research rabbit holes. Just run it and answer the questions.
 
@@ -29,24 +29,27 @@ Set this up on every device you own and every server you run. Seriously. It crea
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
 - [What the script does](#what-the-script-does)
-  - [Step 1 - Admin user setup](#step-1--admin-user-setup)
-  - [Step 2 - SSH hardening](#step-2--ssh-hardening)
-  - [Step 3 - Kernel network hardening](#step-3--kernel-network-hardening)
-  - [Step 4 - UFW firewall](#step-4--ufw-firewall)
-  - [Step 5 - Fail2ban](#step-5--fail2ban)
-  - [Step 6 - Git and GitHub access](#step-6--git-and-github-access)
-  - [Step 7 - Tailscale](#step-7--tailscale)
-  - [Step 8 - Optional public SSH closure](#step-8--optional-public-ssh-closure)
-  - [Step 9 - Docker](#step-9--docker)
-  - [Step 10 - Automatic security updates](#step-10--automatic-security-updates)
-  - [Step 11 - Scheduled maintenance](#step-11--scheduled-maintenance)
-  - [Step 12 - Verification](#step-12--verification)
+  - [Step 1 - System package update](#step-1--system-package-update)
+  - [Step 2 - Admin user setup](#step-2--admin-user-setup)
+  - [Step 3 - SSH hardening](#step-3--ssh-hardening)
+  - [Step 4 - Kernel network hardening](#step-4--kernel-network-hardening)
+  - [Step 5 - UFW firewall](#step-5--ufw-firewall)
+  - [Step 6 - Fail2ban](#step-6--fail2ban)
+  - [Step 7 - Git and GitHub access](#step-7--git-and-github-access)
+  - [Step 8 - Tailscale](#step-8--tailscale)
+  - [Step 9 - Optional public SSH closure](#step-9--optional-public-ssh-closure)
+  - [Step 10 - Docker](#step-10--docker)
+  - [Step 11 - Automatic security updates](#step-11--automatic-security-updates)
+  - [Step 12 - Scheduled maintenance](#step-12--scheduled-maintenance)
+  - [Step 13 - Verification](#step-13--verification)
 - [CLI reference](#cli-reference)
 - [Step names for --only and --skip](#step-names-for---only-and---skip)
 - [Common workflows](#common-workflows)
+- [Rerun recipes](#rerun-recipes)
 - [Post-run checks](#post-run-checks)
 - [Logging](#logging)
 - [Security notes](#security-notes)
+- [Threat model](#threat-model)
 - [Project structure](#project-structure)
 - [Roadmap](#roadmap)
 - [License](#license)
@@ -89,19 +92,19 @@ Optional depending on which steps you enable:
 **1. Copy the script to your server**
 
 ```bash
-scp vps-bootstrap-v1.6.4.sh root@YOUR_SERVER_IP:~
+scp ironboot.sh root@YOUR_SERVER_IP:~
 ```
 
 Or download it directly on the server:
 
 ```bash
-curl -O https://raw.githubusercontent.com/dshark3y/ironboot/main/vps-bootstrap-v1.6.4.sh
+curl -O https://raw.githubusercontent.com/dshark3y/ironboot/main/ironboot.sh
 ```
 
 **2. Run it as root**
 
 ```bash
-sudo bash vps-bootstrap-v1.6.4.sh
+sudo bash ironboot.sh
 ```
 
 **3. Follow the prompts**
@@ -114,11 +117,33 @@ Each step tells you what it's going to do before it does it. You can skip anythi
 
 ## What the script does
 
-12 steps in sequence. Every step is optional - skip any with `--skip`, or target a specific one with `--only`. Saying no to a step leaves the server clean. Nothing is done irreversibly without a warning first.
+13 steps in sequence. Every step is optional - skip any with `--skip`, or target a specific one with `--only`. Saying no to a step leaves the server clean. Nothing is done irreversibly without a warning first.
+
+`--only` now means exactly that: only the selected step functions run. A targeted rerun such as `--only=auto-updates` does not perform a full package upgrade, edit SSH, touch the firewall, or install Docker.
 
 ---
 
-### Step 1 - Admin user setup
+### Step 1 - System package update
+
+**What it does**
+
+Runs `apt-get update` and `apt-get upgrade` during a normal full bootstrap.
+
+**Why**
+
+Fresh VPS images are often behind on package updates by the time you first log in. Updating first gives every later step a current package base.
+
+**Rerun behavior**
+
+This is its own explicit step named `system-update`. It runs during the default full bootstrap, but it does not run during narrow reruns unless you ask for it:
+
+```bash
+sudo bash ironboot.sh --only=system-update
+```
+
+---
+
+### Step 2 - Admin user setup
 
 **What it does**
 
@@ -138,11 +163,11 @@ When prompted to set a password, Linux won't show anything as you type - this is
 
 ---
 
-### Step 2 - SSH hardening
+### Step 3 - SSH hardening
 
 **What it does**
 
-Tightens up `/etc/ssh/sshd_config`. Before restarting SSH, the script validates the config with `sshd -t` - a syntax error will not cut off your session.
+Tightens SSH configuration. On modern Ubuntu/Debian installs it writes a managed drop-in at `/etc/ssh/sshd_config.d/99-ironboot.conf`; otherwise it falls back to editing `/etc/ssh/sshd_config`. Before restarting SSH, the script validates the config with `sshd -t` - a syntax error will not cut off your session.
 
 You're asked about three things:
 - **Changing the SSH port** - moves SSH off port 22
@@ -182,11 +207,11 @@ Open a second terminal and confirm the new login works before closing your curre
 
 ---
 
-### Step 3 - Kernel network hardening
+### Step 4 - Kernel network hardening
 
 **What it does**
 
-Writes `/etc/sysctl.d/99-vps-bootstrap.conf` and applies it with `sysctl --system`. These are kernel-level network security settings that most cloud images ship with at defaults that aren't appropriate for a public-facing server.
+Writes `/etc/sysctl.d/99-ironboot.conf` and applies it with `sysctl --system`. These are kernel-level network security settings that most cloud images ship with at defaults that aren't appropriate for a public-facing server.
 
 | Parameter | What it does |
 |---|---|
@@ -205,7 +230,7 @@ You can do everything right at the application layer and still be vulnerable at 
 
 ---
 
-### Step 4 - UFW firewall
+### Step 5 - UFW firewall
 
 **What it does**
 
@@ -227,7 +252,7 @@ Without a firewall, every port your server is listening on is reachable from the
 
 ---
 
-### Step 5 - Fail2ban
+### Step 6 - Fail2ban
 
 **What it does**
 
@@ -250,7 +275,7 @@ A legitimate user failing SSH key auth more than 3 times has a config problem th
 
 ---
 
-### Step 6 - Git and GitHub access
+### Step 7 - Git and GitHub access
 
 **What it does**
 
@@ -270,7 +295,7 @@ First-time SSH connections to GitHub prompt for host key confirmation - which bl
 
 ---
 
-### Step 7 - Tailscale
+### Step 8 - Tailscale
 
 **What it does**
 
@@ -290,7 +315,7 @@ Tailscale requires an account and runs a persistent background service. It's not
 
 ---
 
-### Step 8 - Optional public SSH closure
+### Step 9 - Optional public SSH closure
 
 **What it does**
 
@@ -309,7 +334,7 @@ Only after:
 
 ---
 
-### Step 9 - Docker
+### Step 10 - Docker
 
 **What it does**
 
@@ -327,7 +352,7 @@ Without this, running Docker requires `sudo` every time. Adding the admin user t
 
 ---
 
-### Step 10 - Automatic security updates
+### Step 11 - Automatic security updates
 
 **What it does**
 
@@ -353,7 +378,7 @@ cat /run/reboot-required 2>/dev/null && echo "reboot needed" || echo "no reboot 
 
 ---
 
-### Step 11 - Scheduled maintenance
+### Step 12 - Scheduled maintenance
 
 **What it does**
 
@@ -397,7 +422,7 @@ Unattended-upgrades is designed for security patches only - it's conservative by
 
 ---
 
-### Step 12 - Verification
+### Step 13 - Verification
 
 **What it does**
 
@@ -420,13 +445,16 @@ This doesn't replace testing manually. Open a new terminal and verify your own a
 ## CLI reference
 
 ```
-Usage: sudo bash vps-bootstrap-v1.6.4.sh [options]
+Usage: sudo bash ironboot.sh [options]
 
 Options:
   --dry-run          Show what would happen without making any changes
   --verbose          Stream command output to the terminal as well as the log
+  --yes              Accept prompt defaults without interactive confirmation
+  --ssh-port=PORT    Override detected SSH port for firewall/fail2ban reruns
   --only=a,b,c       Run only the specified steps (comma-separated)
   --skip=a,b,c       Skip the specified steps (comma-separated)
+  --version          Print version and exit
   -h, --help         Show this help
 ```
 
@@ -435,7 +463,7 @@ Options:
 Preview every action without changing anything. Prompts still appear; all writes, installs, and service restarts show as `(dry-run)`. Run this first on any server that's not a clean install.
 
 ```bash
-sudo bash vps-bootstrap-v1.6.4.sh --dry-run
+sudo bash ironboot.sh --dry-run
 ```
 
 ### `--verbose`
@@ -443,7 +471,23 @@ sudo bash vps-bootstrap-v1.6.4.sh --dry-run
 Stream command output live to the terminal instead of writing only to the log. Useful when a step is failing and you want to see what's happening.
 
 ```bash
-sudo bash vps-bootstrap-v1.6.4.sh --verbose
+sudo bash ironboot.sh --verbose
+```
+
+### `--yes`
+
+Accept prompt defaults automatically. Defaults are intentionally conservative: prompts with a `N` default still stay no.
+
+```bash
+sudo bash ironboot.sh --dry-run --yes --only=auto-updates
+```
+
+### `--ssh-port`
+
+Override SSH port detection for targeted firewall or fail2ban reruns. Use this if the server has custom SSH config that detection cannot infer cleanly.
+
+```bash
+sudo bash ironboot.sh --only=fail2ban --ssh-port=2293
 ```
 
 ### `--only`
@@ -451,7 +495,7 @@ sudo bash vps-bootstrap-v1.6.4.sh --verbose
 Run specific steps, skip everything else. Useful for re-running a single step on an already-configured server.
 
 ```bash
-sudo bash vps-bootstrap-v1.6.4.sh --only=docker,verify
+sudo bash ironboot.sh --only=docker,verify
 ```
 
 ### `--skip`
@@ -459,7 +503,7 @@ sudo bash vps-bootstrap-v1.6.4.sh --only=docker,verify
 Run everything except the steps you name.
 
 ```bash
-sudo bash vps-bootstrap-v1.6.4.sh --skip=git,tailscale,close-ssh
+sudo bash ironboot.sh --skip=git,tailscale,close-ssh
 ```
 
 ---
@@ -468,6 +512,7 @@ sudo bash vps-bootstrap-v1.6.4.sh --skip=git,tailscale,close-ssh
 
 | Name | Step |
 |---|---|
+| `system-update` | Apt update and upgrade |
 | `user` | Admin user setup |
 | `ssh` | SSH hardening |
 | `sysctl` | Kernel network hardening |
@@ -490,7 +535,7 @@ sudo bash vps-bootstrap-v1.6.4.sh --skip=git,tailscale,close-ssh
 Admin user, hardened SSH, firewall, fail2ban, Docker, auto-updates, scheduled maintenance. SSH stays on the internet on a custom port.
 
 ```bash
-sudo bash vps-bootstrap-v1.6.4.sh
+sudo bash ironboot.sh
 ```
 
 Suggested answers:
@@ -514,7 +559,7 @@ Suggested answers:
 SSH never exposed to the internet. The server is only reachable through your Tailnet. This is how I run most of my own servers.
 
 ```bash
-sudo bash vps-bootstrap-v1.6.4.sh
+sudo bash ironboot.sh
 ```
 
 Suggested answers:
@@ -535,19 +580,63 @@ Suggested answers:
 The script is safe to run multiple times. Adding Docker to an already-hardened server:
 
 ```bash
-sudo bash vps-bootstrap-v1.6.4.sh --only=docker,verify
+sudo bash ironboot.sh --only=docker,verify
 ```
 
 Adding Tailscale later:
 
 ```bash
-sudo bash vps-bootstrap-v1.6.4.sh --only=tailscale
+sudo bash ironboot.sh --only=tailscale
 ```
 
 Setting up scheduled maintenance on an existing server:
 
 ```bash
-sudo bash vps-bootstrap-v1.6.4.sh --only=cron
+sudo bash ironboot.sh --only=cron
+```
+
+---
+
+## Rerun recipes
+
+### Enable automatic security updates on an existing server
+
+This is the narrow rerun for the original use case:
+
+```bash
+sudo bash ironboot.sh --only=auto-updates
+```
+
+It installs and configures `unattended-upgrades`. It does not edit SSH, touch UFW, install Docker, install Tailscale, or run a full system upgrade.
+
+To preview the exact flow first:
+
+```bash
+sudo bash ironboot.sh --dry-run --yes --only=auto-updates
+```
+
+### Rebuild fail2ban for a custom SSH port
+
+The script tries to detect the active SSH port from SSH config. If your setup is unusual, pass it explicitly:
+
+```bash
+sudo bash ironboot.sh --only=fail2ban --ssh-port=2293
+```
+
+### Update packages deliberately
+
+Package upgrades are now an explicit step:
+
+```bash
+sudo bash ironboot.sh --only=system-update
+```
+
+### Close public SSH after Tailscale is already installed
+
+Only do this after confirming `tailscale ssh` works from a second terminal:
+
+```bash
+sudo bash ironboot.sh --only=close-ssh --ssh-port=2293
 ```
 
 ---
@@ -606,7 +695,7 @@ sudo tail -f /var/log/vps-maintenance.log
 **Full audit log:**
 
 ```bash
-sudo less /var/log/vps-bootstrap-YYYYmmdd-HHMMSS.log
+sudo less /var/log/ironboot-YYYYmmdd-HHMMSS.log
 ```
 
 ---
@@ -616,7 +705,7 @@ sudo less /var/log/vps-bootstrap-YYYYmmdd-HHMMSS.log
 Every run writes a timestamped log to `/var/log/`:
 
 ```
-/var/log/vps-bootstrap-20240315-143022.log
+/var/log/ironboot-20240315-143022.log
 ```
 
 The path is printed at startup and in the final summary. The log records every command run with its full arguments, every file written with path, mode and owner, every service restart, and every timestamped action. Created with `chmod 600` - only root can read it.
@@ -633,7 +722,7 @@ The weekly maintenance job writes to its own log:
 
 **Never close your current session until the new one is tested.** Every SSH change, every firewall change, every decision to close public access - open a second terminal, confirm it works, then close the original. There is no other safe order.
 
-**The script validates SSH config before restarting.** `sshd -t` runs before any SSH service restart. If there's a syntax error, the script stops and points you to the backup. Backups are written as `filename.bak.TIMESTAMP` before any changes are made.
+**The script validates SSH config before restarting.** `sshd -t` runs before any SSH service restart. If there's a syntax error, the script stops and points you to the backup. Backups are written as `filename.bak.TIMESTAMP` before SSH config changes are made.
 
 **Password auth is blocked from being disabled if no SSH keys exist.** If the target user has no `authorized_keys` file, the option is not presented. The script tells you to add a key first, then re-run with `--only=ssh`.
 
@@ -641,36 +730,58 @@ The weekly maintenance job writes to its own log:
 
 ---
 
+## Threat model
+
+ironboot protects against common VPS exposure mistakes:
+
+- Logging in as root for routine admin work
+- Password-based SSH brute-force attempts
+- Publicly reachable ports that should have stayed private
+- Known package vulnerabilities left unpatched
+- Basic network-layer abuse such as ICMP redirects and source routing
+- Repeated SSH probing and noisy automated scans
+
+It does not protect against everything:
+
+- Compromised application code
+- Leaked SSH private keys
+- A malicious admin user
+- Weak cloud-provider account security
+- Insecure Docker containers or bind mounts
+- Bad secrets handling inside deployed apps
+
+Tailscale is recommended because it changes the access model. Instead of exposing SSH to the whole internet, you can keep administration on a private encrypted network and optionally remove public SSH firewall access after testing.
+
+Automatic security updates are enabled without automatic reboot. That keeps known CVEs patched without surprise restarts. Kernel updates may still require a planned reboot; check `/run/reboot-required`.
+
+If SSH changes go wrong, use your provider console, restore the latest `/etc/ssh/sshd_config.bak.TIMESTAMP`, then restart SSH.
+
+---
+
 ## Project structure
 
 ```
 .
-├── README.md
-└── vps-bootstrap-v1.6.4.sh
-```
-
-Recommended additions:
-
-```
-.
-├── README.md
-├── LICENSE
+├── .github/workflows/ci.yml
+├── .gitignore
+├── .shellcheckrc
 ├── CHANGELOG.md
-├── vps-bootstrap-v1.6.4.sh
-└── examples/
-    ├── sample-output.txt
-    └── tailscale-first-runbook.md
+├── CONTRIBUTING.md
+├── LICENSE
+├── PROPOSED_CHANGES.md
+├── README.md
+├── ironboot.sh
+├── RELEASE_CHECKLIST.md
+└── tests/smoke.sh
 ```
 
 ---
 
 ## Roadmap
 
-- **Drop-in SSH config** - write hardening to `/etc/ssh/sshd_config.d/` instead of editing the main file directly
 - **Pinned GitHub host keys** - replace `ssh-keyscan` with verified fingerprints
 - **Swap file creation** - useful on low-memory VPS instances
 - **Hostname and timezone setup** - common first-boot tasks currently done manually
-- **Shellcheck CI** - automated linting before release
 - **Caddy / reverse proxy step** - optional setup for servers running web applications
 - **Rollback hints** - better guidance when a step fails mid-way
 - **Multiple Compose directories** - currently the cron step supports one Compose path; multi-stack support would be useful

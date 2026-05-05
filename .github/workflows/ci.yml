@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Shell syntax
+        run: bash -n ironboot.sh
+
+      - name: ShellCheck
+        run: shellcheck ironboot.sh tests/smoke.sh
+
+      - name: Smoke tests
+        run: bash tests/smoke.sh
