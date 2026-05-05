@@ -50,6 +50,14 @@ fi
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
+print_line() {
+  printf '%b\n' "$1"
+}
+
+print_raw() {
+  printf '%b' "$1"
+}
+
 safe_write_log() {
   local level="$1"
   shift || true
@@ -58,17 +66,17 @@ safe_write_log() {
   fi
 }
 
-log()  { printf "  ${BLUE}→${NC}  %s\n"   "$*"; safe_write_log INFO  "$*"; }
-ok()   { printf "  ${GREEN}✔${NC}  %s\n"  "$*"; safe_write_log OK    "$*"; }
-warn() { printf "  ${YELLOW}⚠${NC}  %s\n" "$*"; safe_write_log WARN  "$*"; }
-err()  { printf "  ${RED}✖${NC}  %s\n"   "$*" >&2; safe_write_log ERROR "$*"; }
+log()  { print_line "  ${BLUE}→${NC}  $*"; safe_write_log INFO  "$*"; }
+ok()   { print_line "  ${GREEN}✔${NC}  $*"; safe_write_log OK    "$*"; }
+warn() { print_line "  ${YELLOW}⚠${NC}  $*"; safe_write_log WARN  "$*"; }
+err()  { print_line "  ${RED}✖${NC}  $*" >&2; safe_write_log ERROR "$*"; }
 die()  { err "$*"; exit 1; }
 
 section() {
   ((STEP_NUM++)) || true
   echo
-  printf "${BOLD}${CYAN}  ◈${NC}  ${BOLD}Step ${STEP_NUM}${NC}  ${DIM}─${NC}  ${BOLD}%s${NC}\n" "$1"
-  [[ -n "${2:-}" ]] && printf "     ${DIM}%s${NC}\n" "$2"
+  print_line "${BOLD}${CYAN}  ◈${NC}  ${BOLD}Step ${STEP_NUM}${NC}  ${DIM}─${NC}  ${BOLD}${1}${NC}"
+  [[ -n "${2:-}" ]] && print_line "     ${DIM}${2}${NC}"
   echo
 }
 
@@ -89,7 +97,7 @@ _spin_loop() {
   local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
   local i=0
   while true; do
-    printf "\r  ${CYAN}%s${NC}  %s " "${frames[$((i % 10))]}" "$msg"
+    print_raw "\r  ${CYAN}${frames[$((i % 10))]}${NC}  ${msg} "
     sleep 0.08
     ((i++)) || true
   done
@@ -119,12 +127,12 @@ run_cmd() {
   safe_write_log INFO "RUN: ${desc} :: $*"
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    printf "  ${YELLOW}◦${NC}  %s  ${DIM}(dry-run)${NC}\n" "$desc"
+    print_line "  ${YELLOW}◦${NC}  ${desc}  ${DIM}(dry-run)${NC}"
     return 0
   fi
 
   if [[ "$VERBOSE" -eq 1 ]]; then
-    printf "  ${CYAN}▶${NC}  %s\n" "$desc"
+    print_line "  ${CYAN}▶${NC}  ${desc}"
     "$@" 2>&1 | tee -a "$LOG_FILE"
     local rc=${PIPESTATUS[0]}
     return "$rc"
@@ -135,9 +143,9 @@ run_cmd() {
   local rc=$?
   spin_stop
   if [[ $rc -eq 0 ]]; then
-    printf "  ${GREEN}✔${NC}  %s\n" "$desc"
+    print_line "  ${GREEN}✔${NC}  ${desc}"
   else
-    printf "  ${RED}✖${NC}  %s\n" "$desc"
+    print_line "  ${RED}✖${NC}  ${desc}"
   fi
   return $rc
 }
@@ -219,7 +227,7 @@ write_file() {
   cat > "$tmp"
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    printf "  ${YELLOW}◦${NC}  write %s  ${DIM}(dry-run)${NC}\n" "$path"
+    print_line "  ${YELLOW}◦${NC}  write ${path}  ${DIM}(dry-run)${NC}"
     rm -f "$tmp"
     return 0
   fi
@@ -244,14 +252,14 @@ ask_yes_no() {
   local default="${2:-Y}"
   local hint="${3:-}"
   local reply
-  [[ -n "$hint" ]] && printf "  ${DIM}↳ %s${NC}\n" "$hint"
+  [[ -n "$hint" ]] && print_line "  ${DIM}↳ ${hint}${NC}"
 
   if [[ "$ASSUME_YES" -eq 1 ]]; then
     if [[ "$default" == "Y" ]]; then
-      printf "  ${BOLD}?${NC}  %s ${DIM}[Y/n]${NC}: Y ${DIM}(--yes)${NC}\n" "$prompt"
+      print_line "  ${BOLD}?${NC}  ${prompt} ${DIM}[Y/n]${NC}: Y ${DIM}(--yes)${NC}"
       return 0
     fi
-    printf "  ${BOLD}?${NC}  %s ${DIM}[y/N]${NC}: N ${DIM}(--yes default)${NC}\n" "$prompt"
+    print_line "  ${BOLD}?${NC}  ${prompt} ${DIM}[y/N]${NC}: N ${DIM}(--yes default)${NC}"
     return 1
   fi
 
@@ -356,7 +364,7 @@ apt_install_quiet() {
   log_tmp="$(mktemp /tmp/ironboot-apt-XXXXXX.log)"
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    printf "  ${YELLOW}◦${NC}  install packages: %s  ${DIM}(dry-run)${NC}\n" "$*"
+    print_line "  ${YELLOW}◦${NC}  install packages: $*  ${DIM}(dry-run)${NC}"
     rm -f "$log_tmp"
     return 0
   fi
@@ -364,7 +372,7 @@ apt_install_quiet() {
   spin_start "Installing: $*"
   if apt-get install -y "$@" > "$log_tmp" 2>&1; then
     spin_stop
-    printf "  ${GREEN}✔${NC}  Installed: %s\n" "$*"
+    print_line "  ${GREEN}✔${NC}  Installed: $*"
     cat "$log_tmp" >> "$LOG_FILE"
     rm -f "$log_tmp"
     return 0
@@ -514,7 +522,7 @@ _summary_row() {
     dry-run)                          icon="${YELLOW}◦${NC}" ;;
     *)                                icon="${CYAN}·${NC}" ;;
   esac
-  printf "  %b  ${DIM}%-28s${NC}  %s\n" "$icon" "$label" "$value"
+  printf '  %b  %b%-28s%b  %s\n' "$icon" "$DIM" "$label" "$NC" "$value"
 }
 
 print_summary() {
@@ -522,8 +530,8 @@ print_summary() {
   ssh_summary_port="$(current_ssh_port)"
 
   echo
-  printf "  ${BOLD}Summary${NC}\n"
-  printf "  ${DIM}──────────────────────────────────────────────${NC}\n"
+  print_line "  ${BOLD}Summary${NC}"
+  print_line "  ${DIM}──────────────────────────────────────────────${NC}"
 
   _summary_row "System update"            "${SYSTEM_UPDATE_RESULT:-no}"
   if [[ "${NEW_USER:-}" == "skipped" ]]; then
@@ -545,8 +553,8 @@ print_summary() {
   _summary_row "Scheduled maintenance"    "${CRON_RESULT:-no}"
   _summary_row "GitHub deploy key"        "${GITHUB_KEY_RESULT:-no}"
 
-  printf "  ${DIM}──────────────────────────────────────────────${NC}\n"
-  printf "  ${DIM}Log: %s${NC}\n" "$LOG_FILE"
+  print_line "  ${DIM}──────────────────────────────────────────────${NC}"
+  print_line "  ${DIM}Log: ${LOG_FILE}${NC}"
   echo
 }
 
@@ -600,7 +608,7 @@ create_sudo_user() {
     log "Creating user '$username'..."
     warn "You are about to set the password for '${username}'. Linux will ask you to type it twice, and nothing will show while you type."
     if [[ "$DRY_RUN" -eq 1 ]]; then
-      printf "  ${YELLOW}◦${NC}  create user %s  ${DIM}(dry-run)${NC}\n" "$username"
+      print_line "  ${YELLOW}◦${NC}  create user ${username}  ${DIM}(dry-run)${NC}"
     else
       adduser --gecos "" "$username"
     fi
@@ -617,7 +625,7 @@ create_sudo_user() {
   if ask_yes_no "Copy root authorized_keys to '${username}' if present?" "Y" "Recommended — copies your existing SSH key so you can log in as the new user without re-adding it."; then
     if [[ -f /root/.ssh/authorized_keys ]]; then
       if [[ "$DRY_RUN" -eq 1 ]]; then
-        printf "  ${YELLOW}◦${NC}  copy /root/.ssh/authorized_keys to /home/%s/.ssh/authorized_keys  ${DIM}(dry-run)${NC}\n" "$username"
+        print_line "  ${YELLOW}◦${NC}  copy /root/.ssh/authorized_keys to /home/${username}/.ssh/authorized_keys  ${DIM}(dry-run)${NC}"
       else
         cp /root/.ssh/authorized_keys "/home/${username}/.ssh/authorized_keys"
         chown "${username}:${username}" "/home/${username}/.ssh/authorized_keys"
@@ -723,7 +731,7 @@ configure_ssh() {
   fi
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    printf "  ${YELLOW}◦${NC}  validate and restart SSH service  ${DIM}(dry-run)${NC}\n"
+    print_line "  ${YELLOW}◦${NC}  validate and restart SSH service  ${DIM}(dry-run)${NC}"
     return 0
   fi
 
@@ -928,7 +936,7 @@ install_git_and_github_key() {
 
   warn "Adding GitHub to known_hosts using ssh-keyscan. This is convenient, but pinned host keys are stricter."
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    printf "  ${YELLOW}◦${NC}  add GitHub to known_hosts for %s  ${DIM}(dry-run)${NC}\n" "$target_user"
+    print_line "  ${YELLOW}◦${NC}  add GitHub to known_hosts for ${target_user}  ${DIM}(dry-run)${NC}"
   else
     if ssh-keyscan github.com >> "${home_dir}/.ssh/known_hosts" 2>> "$LOG_FILE"; then
       chown "${target_user}:${target_user}" "${home_dir}/.ssh/known_hosts"
@@ -940,16 +948,17 @@ install_git_and_github_key() {
   fi
 
   echo
-  printf "  ${BOLD}Add this public key to GitHub:${NC}\n\n"
+  print_line "  ${BOLD}Add this public key to GitHub:${NC}"
+  echo
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    printf "  ${DIM}[dry-run] Public key would be shown here after generation.${NC}\n"
+    print_line "  ${DIM}[dry-run] Public key would be shown here after generation.${NC}"
   else
     cat "${home_dir}/.ssh/id_ed25519.pub"
   fi
   echo
-  printf "  ${DIM}Add it here: https://github.com/settings/ssh/new${NC}\n"
-  printf "  ${DIM}Or navigate: GitHub → Settings → SSH and GPG keys → New SSH key${NC}\n"
-  printf "  ${DIM}Repo SSH clone: git@github.com:OWNER/REPO.git${NC}\n"
+  print_line "  ${DIM}Add it here: https://github.com/settings/ssh/new${NC}"
+  print_line "  ${DIM}Or navigate: GitHub → Settings → SSH and GPG keys → New SSH key${NC}"
+  print_line "  ${DIM}Repo SSH clone: git@github.com:OWNER/REPO.git${NC}"
   GITHUB_KEY_RESULT="yes"
 }
 
@@ -972,12 +981,12 @@ install_tailscale() {
   else
     apt_install curl ca-certificates
     if [[ "$DRY_RUN" -eq 1 ]]; then
-      printf "  ${YELLOW}◦${NC}  install Tailscale  ${DIM}(dry-run)${NC}\n"
+      print_line "  ${YELLOW}◦${NC}  install Tailscale  ${DIM}(dry-run)${NC}"
     else
       spin_start "Installing Tailscale"
       if curl -fsSL https://tailscale.com/install.sh | sh >> "$LOG_FILE" 2>&1; then
         spin_stop
-        printf "  ${GREEN}✔${NC}  Tailscale installed\n"
+        print_line "  ${GREEN}✔${NC}  Tailscale installed"
       else
         spin_stop
         die "Tailscale install failed. Review log: $LOG_FILE"
@@ -998,7 +1007,7 @@ install_tailscale() {
     else
       warn "Interactive Tailscale login may print a URL. Follow it to complete login."
       if [[ "$DRY_RUN" -eq 1 ]]; then
-        printf "  ${YELLOW}◦${NC}  tailscale up --ssh  ${DIM}(dry-run)${NC}\n"
+        print_line "  ${YELLOW}◦${NC}  tailscale up --ssh  ${DIM}(dry-run)${NC}"
       else
         tailscale up --ssh 2>&1 | tee -a "$LOG_FILE" || true
       fi
@@ -1011,7 +1020,7 @@ install_tailscale() {
     else
       warn "Interactive Tailscale login may print a URL. Follow it to complete login."
       if [[ "$DRY_RUN" -eq 1 ]]; then
-        printf "  ${YELLOW}◦${NC}  tailscale up  ${DIM}(dry-run)${NC}\n"
+        print_line "  ${YELLOW}◦${NC}  tailscale up  ${DIM}(dry-run)${NC}"
       else
         tailscale up 2>&1 | tee -a "$LOG_FILE" || true
       fi
@@ -1075,13 +1084,13 @@ install_docker() {
 
   if [[ ! -f /etc/apt/keyrings/docker.gpg ]]; then
     if [[ "$DRY_RUN" -eq 1 ]]; then
-      printf "  ${YELLOW}◦${NC}  fetch Docker GPG key  ${DIM}(dry-run)${NC}\n"
+      print_line "  ${YELLOW}◦${NC}  fetch Docker GPG key  ${DIM}(dry-run)${NC}"
     else
       spin_start "Fetching Docker GPG key"
       if curl -fsSL "https://download.docker.com/linux/${OS_ID}/gpg" | gpg --dearmor -o /etc/apt/keyrings/docker.gpg; then
         chmod a+r /etc/apt/keyrings/docker.gpg
         spin_stop
-        printf "  ${GREEN}✔${NC}  Docker GPG key fetched\n"
+        print_line "  ${GREEN}✔${NC}  Docker GPG key fetched"
         safe_write_log INFO "Fetched Docker GPG key"
       else
         spin_stop
@@ -1175,8 +1184,8 @@ install_cron_jobs() {
   fi
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    printf "  ${YELLOW}◦${NC}  write /usr/local/bin/vps-maintenance  ${DIM}(dry-run)${NC}\n"
-    printf "  ${YELLOW}◦${NC}  write /etc/cron.d/vps-maintenance  ${DIM}(dry-run)${NC}\n"
+    print_line "  ${YELLOW}◦${NC}  write /usr/local/bin/vps-maintenance  ${DIM}(dry-run)${NC}"
+    print_line "  ${YELLOW}◦${NC}  write /etc/cron.d/vps-maintenance  ${DIM}(dry-run)${NC}"
     CRON_RESULT="dry-run"
     return 0
   fi
@@ -1192,9 +1201,9 @@ install_cron_jobs() {
     printf 'set -euo pipefail\n'
     printf '\n'
     printf 'LOG=/var/log/vps-maintenance.log\n'
-    printf 'exec >> "$LOG" 2>&1\n'
+    printf 'exec >> "%s" 2>&1\n' "\${LOG}"
     printf 'echo ""\n'
-    printf 'echo "=== vps-maintenance started $(date) ==="\n'
+    printf 'echo "=== vps-maintenance started %s ==="\n' "\$(date)"
     printf '\n'
 
     if [[ "$want_apt" -eq 1 ]]; then
@@ -1210,7 +1219,7 @@ install_cron_jobs() {
       printf '# ── Docker image updates ─────────────────────────────────────────────────────\n'
       printf 'echo "--- docker image pull ---"\n'
       printf 'docker ps --format "{{.Image}}" | sort -u | while read -r img; do\n'
-      printf '  docker pull "$img" || echo "pull failed: $img"\n'
+      printf '  docker pull "%s" || echo "pull failed: %s"\n' "\${img}" "\${img}"
       printf 'done\n'
       printf '\n'
       printf '# ── Docker cleanup ───────────────────────────────────────────────────────────\n'
@@ -1223,14 +1232,14 @@ install_cron_jobs() {
       printf '# Example: COMPOSE_DIR=/opt/myapp\n'
       printf '#\n'
       printf '# COMPOSE_DIR=\n'
-      printf '# if [[ -d "$COMPOSE_DIR" ]]; then\n'
-      printf '#   echo "--- docker compose up in $COMPOSE_DIR ---"\n'
-      printf '#   (cd "$COMPOSE_DIR" && docker compose pull && docker compose up -d)\n'
+      printf '# if [[ -d "%s" ]]; then\n' "\${COMPOSE_DIR}"
+      printf '#   echo "--- docker compose up in %s ---"\n' "\${COMPOSE_DIR}"
+      printf '#   (cd "%s" && docker compose pull && docker compose up -d)\n' "\${COMPOSE_DIR}"
       printf '# fi\n'
       printf '\n'
     fi
 
-    printf 'echo "=== vps-maintenance complete $(date) ==="\n'
+    printf 'echo "=== vps-maintenance complete %s ==="\n' "\$(date)"
   } > "$maint_tmp"
 
   install -o root -g root -m 755 "$maint_tmp" /usr/local/bin/vps-maintenance
@@ -1263,7 +1272,7 @@ verify_setup() {
   section "Verification" "Run a few quick checks so you can confirm the main services and protections are in the expected state."
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    printf "  ${DIM}[dry-run] verification skipped${NC}\n"
+    print_line "  ${DIM}[dry-run] verification skipped${NC}"
     return 0
   fi
 
@@ -1319,34 +1328,34 @@ final_notes() {
   fi
 
   echo
-  printf "  ${BOLD}Next checks${NC}\n"
-  printf "  ${DIM}──────────────────────────────────────────────${NC}\n"
-  printf "  ${CYAN}1.${NC}  Open a new terminal before closing your current session.\n"
-  printf "  ${CYAN}2.${NC}  Test SSH again:\n"
+  print_line "  ${BOLD}Next checks${NC}"
+  print_line "  ${DIM}──────────────────────────────────────────────${NC}"
+  print_line "  ${CYAN}1.${NC}  Open a new terminal before closing your current session."
+  print_line "  ${CYAN}2.${NC}  Test SSH again:"
   if [[ -z "$display_user" ]]; then
-    printf "       ${YELLOW}Root login is disabled and no admin user was set up in this run.${NC}\n"
-    printf "       ${DIM}Use an existing admin account: ssh YOUR_USER@SERVER_IP -p %s${NC}\n" "$ssh_port"
-    printf "       ${DIM}If locked out, restore /etc/ssh/sshd_config.bak.* and restart SSH.${NC}\n"
+    print_line "       ${YELLOW}Root login is disabled and no admin user was set up in this run.${NC}"
+    print_line "       ${DIM}Use an existing admin account: ssh YOUR_USER@SERVER_IP -p ${ssh_port}${NC}"
+    print_line "       ${DIM}If locked out, restore /etc/ssh/sshd_config.bak.* and restart SSH.${NC}"
   elif [[ "${TAILSCALE_SSH_RESULT:-no}" == "yes" ]]; then
-    printf "       ${DIM}tailscale ssh %s@%s${NC}\n" "$display_user" "${HOSTNAME}"
+    print_line "       ${DIM}tailscale ssh ${display_user}@${HOSTNAME}${NC}"
   else
-    printf "       ${DIM}ssh %s@SERVER_IP -p %s${NC}\n" "$display_user" "$ssh_port"
+    print_line "       ${DIM}ssh ${display_user}@SERVER_IP -p ${ssh_port}${NC}"
   fi
-  printf "  ${CYAN}3.${NC}  Check firewall:\n"
-  printf "       ${DIM}sudo ufw status verbose${NC}\n"
-  printf "  ${CYAN}4.${NC}  Check fail2ban:\n"
-  printf "       ${DIM}sudo fail2ban-client status${NC}\n"
-  printf "  ${CYAN}5.${NC}  Check Docker:\n"
-  printf "       ${DIM}docker --version && docker compose version${NC}\n"
+  print_line "  ${CYAN}3.${NC}  Check firewall:"
+  print_line "       ${DIM}sudo ufw status verbose${NC}"
+  print_line "  ${CYAN}4.${NC}  Check fail2ban:"
+  print_line "       ${DIM}sudo fail2ban-client status${NC}"
+  print_line "  ${CYAN}5.${NC}  Check Docker:"
+  print_line "       ${DIM}docker --version && docker compose version${NC}"
   if [[ "${CRON_RESULT:-no}" == "yes" ]]; then
-    printf "  ${CYAN}6.${NC}  Review or edit the maintenance script:\n"
-    printf "       ${DIM}sudo cat /usr/local/bin/vps-maintenance${NC}\n"
-    printf "       ${DIM}sudo cat /etc/cron.d/vps-maintenance${NC}\n"
-    printf "  ${CYAN}7.${NC}  Review the log if needed:\n"
+    print_line "  ${CYAN}6.${NC}  Review or edit the maintenance script:"
+    print_line "       ${DIM}sudo cat /usr/local/bin/vps-maintenance${NC}"
+    print_line "       ${DIM}sudo cat /etc/cron.d/vps-maintenance${NC}"
+    print_line "  ${CYAN}7.${NC}  Review the log if needed:"
   else
-    printf "  ${CYAN}6.${NC}  Review the log if needed:\n"
+    print_line "  ${CYAN}6.${NC}  Review the log if needed:"
   fi
-  printf "       ${DIM}sudo less %s${NC}\n" "$LOG_FILE"
+  print_line "       ${DIM}sudo less ${LOG_FILE}${NC}"
   echo
 }
 
@@ -1358,16 +1367,16 @@ main() {
   detect_os
 
   echo
-  printf "  ${GREEN}${BOLD}▸  ironboot${NC}\n"
-  printf "     ${CYAN}v%s${NC}  ${DIM}·  %s${NC}\n" "$SCRIPT_VERSION" "${PRETTY_NAME}"
-  printf "  ${BLUE}──────────────────────────────────────────────${NC}\n"
-  printf "  ${DIM}Log:  %s${NC}\n" "$LOG_FILE"
-  [[ "$DRY_RUN" -eq 1 ]] && printf "  ${YELLOW}Mode: dry-run${NC}\n"
-  [[ "$VERBOSE" -eq 1 ]] && printf "  ${CYAN}Mode: verbose${NC}\n"
+  print_line "  ${GREEN}${BOLD}▸  ironboot${NC}"
+  print_line "     ${CYAN}v${SCRIPT_VERSION}${NC}  ${DIM}·  ${PRETTY_NAME}${NC}"
+  print_line "  ${BLUE}──────────────────────────────────────────────${NC}"
+  print_line "  ${DIM}Log:  ${LOG_FILE}${NC}"
+  [[ "$DRY_RUN" -eq 1 ]] && print_line "  ${YELLOW}Mode: dry-run${NC}"
+  [[ "$VERBOSE" -eq 1 ]] && print_line "  ${CYAN}Mode: verbose${NC}"
   echo
 
-  printf "  ${DIM}This script will guide you through the server bootstrap step by step.\n"
-  printf "  Some parts are optional. Riskier steps include extra warnings.${NC}\n"
+  print_line "  ${DIM}This script will guide you through the server bootstrap step by step."
+  print_line "  Some parts are optional. Riskier steps include extra warnings.${NC}"
   echo
 
   if ! ask_yes_no "Continue?" "Y"; then
