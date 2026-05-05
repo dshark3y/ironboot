@@ -21,3 +21,4 @@ bash tests/smoke.sh
 ```
 
 Some smoke checks use `sudo --dry-run` behavior and will skip locally if passwordless sudo is unavailable.
+Set `IRONBOOT_RUN_ROOT_SMOKE=1` to opt into the root dry-run check on a machine where sudo is safe to use.

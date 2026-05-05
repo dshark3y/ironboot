@@ -8,6 +8,7 @@ Run these before tagging a new release.
 bash -n ironboot.sh
 shellcheck ironboot.sh tests/smoke.sh
 bash tests/smoke.sh
+IRONBOOT_RUN_ROOT_SMOKE=1 bash tests/smoke.sh
 ```
 
 ## Manual VPS checks
